@@ -30,7 +30,7 @@ def ingest(path: str, config: str | None):
 @main.command()
 @click.argument("query")
 @click.option("--top-k", "-k", default=5, help="Number of results")
-@click.option("--mode", "-m", default="hybrid", type=click.Choice(["dense", "sparse", "hybrid", "graph_enhanced"]))
+@click.option("--mode", "-m", default="hybrid", type=click.Choice(["dense", "sparse", "hybrid", "graph_enhanced", "local_residual", "residual_hybrid"]))
 @click.option("--no-graph", is_flag=True, help="Disable knowledge graph enhancement")
 def search(query: str, top_k: int, mode: str, no_graph: bool):
     """Search indexed documents."""
@@ -44,7 +44,7 @@ def search(query: str, top_k: int, mode: str, no_graph: bool):
 @main.command()
 @click.argument("question")
 @click.option("--top-k", "-k", default=5, help="Number of context chunks")
-@click.option("--mode", "-m", default="hybrid", type=click.Choice(["dense", "sparse", "hybrid", "graph_enhanced"]))
+@click.option("--mode", "-m", default="hybrid", type=click.Choice(["dense", "sparse", "hybrid", "graph_enhanced", "local_residual", "residual_hybrid"]))
 def query(question: str, top_k: int, mode: str):
     """Ask a question with RAG-powered grounded generation."""
     rag = VeloRAG()

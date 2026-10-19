@@ -22,6 +22,8 @@ class RetrievalMode(str, Enum):
     SPARSE = "sparse"
     HYBRID = "hybrid"
     GRAPH_ENHANCED = "graph_enhanced"
+    LOCAL_RESIDUAL = "local_residual"
+    RESIDUAL_HYBRID = "residual_hybrid"
 
 
 class EmbeddingBackend(str, Enum):

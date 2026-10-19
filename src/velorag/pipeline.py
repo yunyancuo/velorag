@@ -22,11 +22,13 @@ from velorag.indexing.sharding import ShardedIndex
 from velorag.indexing.vector_store import BaseVectorStore, create_vector_store
 from velorag.retrieval.hybrid import HybridRetriever
 from velorag.retrieval.reranker import BaseReranker, create_reranker
+from velorag.retrieval.residual import ResidualConfig, ResidualIndex
 from velorag.utils.cache import MemoryCache
 
 
 class VeloRAG:
-    def __init__(self, settings: Settings | None = None, config: Any = None):
+    def __init__(self, settings: Settings | None = None, config: Any = None,
+                 residual_config: ResidualConfig | None = None):
         if settings is None and config is not None:
             settings = self._settings_from_config(config)
         elif settings is not None and not isinstance(settings, Settings):
@@ -59,6 +61,8 @@ class VeloRAG:
         self.generator = LLMGenerator()
         self.cache = MemoryCache(max_entries=self.settings.cache.max_entries)
         self._all_chunks: list[Chunk] = []
+        self._residual_config = residual_config or ResidualConfig()
+        self._residual_retriever: HybridRetriever | None = None
 
     @staticmethod
     def _settings_from_config(cfg: Any) -> Settings:
@@ -133,7 +137,18 @@ class VeloRAG:
         self.vector_store.add(chunks, embeddings)
         self._all_chunks.extend(chunks)
         self.retriever.set_chunks(self._all_chunks)
+        self._residual_retriever = None
         self.cache.clear()
+
+    def _get_residual_retriever(self) -> HybridRetriever:
+        if self._residual_retriever is None:
+            index = ResidualIndex(self._residual_config)
+            if self._all_chunks:
+                index.fit(self._all_chunks, self.embedder.embed([c.text for c in self._all_chunks]))
+            retriever = HybridRetriever(self.settings.retrieval, index, knowledge_graph=None)
+            retriever.set_chunks(self._all_chunks)
+            self._residual_retriever = retriever
+        return self._residual_retriever
 
     def search(
         self,
@@ -159,10 +174,14 @@ class VeloRAG:
             )
         if candidate_k < top_k:
             raise ValueError("candidate_k must be at least top_k")
-        actual_mode = "hybrid" if mode == "graph_enhanced" else mode
-        actual_graph = True if mode == "graph_enhanced" else use_graph
+        residual_mode = mode in ("local_residual", "residual_hybrid")
+        actual_mode = {
+            "local_residual": "dense", "residual_hybrid": "hybrid",
+            "graph_enhanced": "hybrid",
+        }.get(mode, mode)
+        actual_graph = False if residual_mode else (True if mode == "graph_enhanced" else use_graph)
 
-        cache_key = f"search:{query}:{top_k}:{candidate_k}:{actual_mode}:{actual_graph}:{filters}"
+        cache_key = f"search:{query}:{top_k}:{candidate_k}:{mode}:{actual_graph}:{filters}"
         cached = self.cache.get(cache_key)
         if cached:
             return cached
@@ -177,7 +196,8 @@ class VeloRAG:
             filters=filters or {},
         )
 
-        results = self.retriever.retrieve(query_embedding, context)
+        retriever = self._get_residual_retriever() if residual_mode else self.retriever
+        results = retriever.retrieve(query_embedding, context)
 
         if self.reranker:
             results = self.reranker.rerank(query, results)
