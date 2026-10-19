@@ -6,7 +6,6 @@ encoder. Each method still receives only its own original 50 candidates.
 """
 
 import argparse
-from dataclasses import replace
 from importlib.metadata import version
 import json
 from pathlib import Path
@@ -26,6 +25,8 @@ def main(args):
     from fastembed.rerank.cross_encoder import TextCrossEncoder
 
     pilot = json.loads(args.pilot.read_text(encoding="utf-8"))
+    if pilot["top_k"] != 10 or pilot["candidate_k_per_source"] != 50:
+        raise ValueError("This fixed challenger requires pilot top_k=10 and candidate_k=50")
     selected = pilot["development_query_ids"] + pilot["validation_query_ids"]
     corpus, queries, qrels, dev, validation, _ = load_data(
         args.dataset, len(selected), len(pilot["development_query_ids"]), pilot["seed"])
@@ -83,7 +84,7 @@ def main(args):
                       for metric in ("recall_at_10", "ndcg_at_10", "candidate_recall_at_50")}
                for mode in rows[0]["modes"]}
     report = {
-        "experiment": "Fixed first-40 pilot-validation queries; supplemental challenger, no tuning",
+        "experiment": f"Fixed first-{len(qids)} pilot-validation queries; supplemental challenger, no tuning",
         "code_commit_before_run": args.commit, "script_sha256": file_hash(Path(__file__)),
         "pilot_sha256": file_hash(args.pilot), "query_ids": qids,
         "corpus_size": len(corpus), "candidate_k_per_source": 50, "top_k": 10,

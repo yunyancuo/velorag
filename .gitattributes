@@ -1,0 +1,2 @@
+# Preserve raw experiment bytes and cross-report SHA256 references on Windows.
+docs/research/results/*.json -text whitespace=cr-at-eol

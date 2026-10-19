@@ -11,6 +11,7 @@ from dataclasses import asdict
 from hashlib import sha256
 from importlib.metadata import version
 import json
+import os
 from pathlib import Path
 import platform
 import random
@@ -214,7 +215,7 @@ def main(args):
         print(f"Development weight={weight}", flush=True)
         rows = evaluate(dev, weight)
         metrics = summarize(rows, args.top_k, args.candidates)
-        tuning.append({"weight": weight, "metrics": metrics})
+        tuning.append({"weight": weight, "metrics": metrics, "per_query": rows})
     metric_name = f"ndcg_at_{args.top_k}"
     chosen = max(tuning, key=lambda r: (r["metrics"]["residual_hybrid"][metric_name], -r["weight"]))["weight"]
     print(f"Frozen development-selected weight={chosen}; evaluating validation", flush=True)
@@ -227,6 +228,10 @@ def main(args):
             Path("src/velorag/retrieval/engine.py"), Path("src/velorag/eval/metrics.py"))},
         "python": platform.python_version(), "platform": platform.platform(),
         "numpy": np.__version__, "seed": args.seed,
+        "thread_environment": {key: os.environ.get(key) for key in ("OPENBLAS_NUM_THREADS", "OMP_NUM_THREADS", "MKL_NUM_THREADS")},
+        "numpy_build": getattr(np.__config__, "CONFIG", "unavailable"),
+        "fitted_array_sha256": {name: sha256(getattr(index, name).tobytes()).hexdigest()
+                                for name in ("_vectors", "_keys", "_anchors", "_anchor_references")},
         "dataset_sha256": {str(p.relative_to(args.dataset)): file_hash(p) for p in (
             args.dataset / "corpus.jsonl", args.dataset / "queries.jsonl", args.dataset / "qrels/train.tsv")},
         "corpus_size": len(corpus), "development_query_ids": dev,

@@ -20,6 +20,11 @@ The current proposed research focus and prior-art challenges are documented in
 `docs/research/001-differentiation.md`. Its pilot direction remains a hypothesis;
 no new retrieval algorithm or large-corpus quality improvement has been proven.
 
+`docs/research/002-residual-pilot.md` records the implemented single-layer,
+NEAR-inspired exact residual index and real BGE/SciFact pilot. Development chose
+residual weight zero; do not claim an improvement. C1 incremental maintenance
+remains unimplemented. Follow corrected raw results; the pre-audit run is invalid.
+
 ## Repository map
 
 - `src/velorag/retrieval/`: BM25, fusion, graph retrieval, and reranking.

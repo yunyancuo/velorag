@@ -131,6 +131,13 @@ npm run dev
 
 ---
 
+## 🔬 检索算法实验
+
+研究分支新增 `local_residual` / `residual_hybrid`，实现受 NEAR 启发的单层邻域残差检索。
+首轮真实 BGE + SciFact 小试**未证明残差质量收益**，因此保留为可选实验模式。
+具体算法、公开数据、原始结果和复现命令见 [邻域残差小试](docs/research/002-residual-pilot.md)。
+这版实现使用精确搜索与全量重建，尚未证明大知识库收益或原创性。
+
 ## 🧪 运行测试 (Testing)
 
 ```bash
