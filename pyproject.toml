@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "velorag"
-version = "0.2.0"
-description = "Production-grade RAG framework with knowledge graph, agent canvas, and multi-tenant knowledge bases."
+version = "0.3.0"
+description = "Production-grade Hybrid RAG framework combining Multilingual BM25, Knowledge Graph, Grounded Citations, Refusal Guardrails, and Agent Canvas."
 readme = "README.md"
 license = {text = "Apache-2.0"}
 requires-python = ">=3.10"
@@ -13,15 +13,16 @@ dependencies = [
     "numpy>=1.24",
     "pydantic>=2.0",
     "httpx>=0.24",
-    "tiktoken>=0.5",
+    "pyyaml>=6.0",
+    "click>=8.1",
+    "networkx>=3.0",
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.22",
     "aiofiles>=23.0",
     "python-multipart>=0.0.6",
     "PyPDF2>=3.0",
-    "rank-bm25>=0.2",
     "python-docx>=1.0",
-    "markdown-it-py>=3.0",
     "sqlalchemy>=2.0",
-    "alembic>=1.12",
     "python-jose[cryptography]>=3.3",
     "passlib[bcrypt]>=1.7",
     "pydantic[email]>=2.0",
@@ -35,7 +36,6 @@ vector = ["chromadb>=0.4"]
 queue = ["celery[redis]>=5.3"]
 realtime = ["redis>=5.0"]
 dev = [
-    "velorag[server,embeddings,graph,vector,queue,realtime]",
     "pytest>=7.0",
     "ruff>=0.1",
     "mypy>=1.0",
@@ -43,7 +43,11 @@ dev = [
 full = ["velorag[server,embeddings,graph,vector,queue,realtime]"]
 
 [project.scripts]
-velorag = "velorag.__main__:main"
+velorag = "velorag.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

@@ -1,118 +1,91 @@
-from __future__ import annotations
-
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
-from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
+import os
+import shutil
+from pathlib import Path
 from typing import Optional
 
-from velorag.auth.dependencies import require_user
-from velorag.db.deps import get_db
-from velorag.db.models import User, KnowledgeBase, Document
-from velorag.knowledge.service import KnowledgeBaseService
-from velorag.tasks.ingestion import process_document
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
-router = APIRouter(prefix="/knowledge-bases", tags=["knowledge_bases"])
+from velorag.core.database import get_db
+from velorag.knowledge.models import KnowledgeBaseModel, DocumentModel, DocumentStatus
+from velorag.knowledge.schemas import (
+    KnowledgeBaseCreate,
+    KnowledgeBaseUpdate,
+    KnowledgeBaseResponse,
+    DocumentResponse,
+)
+from velorag.server.state import get_default_pipeline
 
+router = APIRouter(prefix="/knowledge", tags=["Knowledge Base"])
 
-class KBCreate(BaseModel):
-    name: str = Field(min_length=1, max_length=256)
-    description: str = ""
-    embedding_model: str = "all-MiniLM-L6-v2"
-    chunk_strategy: str = "recursive"
-    chunk_size: int = 512
-    chunk_overlap: int = 64
-    retrieval_mode: str = "hybrid"
-    graph_enabled: bool = False
-    is_public: bool = False
-
-
-class KBUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    embedding_model: Optional[str] = None
-    chunk_strategy: Optional[str] = None
-    chunk_size: Optional[int] = None
-    chunk_overlap: Optional[int] = None
-    retrieval_mode: Optional[str] = None
-    graph_enabled: Optional[bool] = None
-    is_public: Optional[bool] = None
+UPLOAD_DIR = Path("./data/uploads")
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-class KBResponse(BaseModel):
-    id: str
-    name: str
-    description: str
-    embedding_model: str
-    chunk_strategy: str
-    chunk_size: int
-    retrieval_mode: str
-    graph_enabled: bool
-    document_count: int = 0
-    created_at: str
-    updated_at: str
-
-    model_config = {"from_attributes": True}
-
-
-class DocumentResponse(BaseModel):
-    id: str
+class DirectTextCreate(BaseModel):
     filename: str
-    file_type: str
-    file_size: int
-    status: str
-    chunk_count: int
-    created_at: str
-
-    model_config = {"from_attributes": True}
+    content: str
 
 
-@router.post("", response_model=KBResponse)
-def create_kb(req: KBCreate, user: User = Depends(require_user), session: Session = Depends(get_db)):
-    kb = KnowledgeBaseService.create(
-        session, user,
-        name=req.name,
-        description=req.description,
-        embedding_model=req.embedding_model,
-        chunk_strategy=req.chunk_strategy,
-        chunk_size=req.chunk_size,
-        chunk_overlap=req.chunk_overlap,
-        retrieval_mode=req.retrieval_mode,
-        graph_enabled=req.graph_enabled,
-        is_public=req.is_public,
-    )
-    return _kb_to_response(kb)
+@router.post("", response_model=KnowledgeBaseResponse)
+def create_kb(kb: KnowledgeBaseCreate, db: Session = Depends(get_db)):
+    db_kb = KnowledgeBaseModel(**kb.model_dump())
+    db.add(db_kb)
+    db.commit()
+    db.refresh(db_kb)
+    return db_kb
 
 
-@router.get("", response_model=list[KBResponse])
-def list_kbs(user: User = Depends(require_user), session: Session = Depends(get_db)):
-    kbs = KnowledgeBaseService.list_for_user(session, user)
-    return [_kb_to_response(kb) for kb in kbs]
+@router.get("", response_model=list[KnowledgeBaseResponse])
+def list_kbs(skip: int = 0, limit: int = 100, db: Session = Depends(get_db)):
+    kbs = db.query(KnowledgeBaseModel).offset(skip).limit(limit).all()
+    if not kbs:
+        # Auto-seed a default Campus & AI Lab KB on first read so UI is immediately usable
+        default_kb = KnowledgeBaseModel(
+            id="default",
+            name="Campus & AI Open Lab Knowledge Base",
+            description="Built-in bilingual corpus covering graduate regulations, GPU cluster Slurm guide, Medical AI compliance, and VeloRAG architecture.",
+            chunk_size=300,
+            chunk_overlap=40,
+        )
+        db.add(default_kb)
+        db.commit()
+        db.refresh(default_kb)
+        return [default_kb]
+    return kbs
 
 
-@router.get("/{kb_id}", response_model=KBResponse)
-def get_kb(kb_id: str, user: User = Depends(require_user), session: Session = Depends(get_db)):
-    kb = KnowledgeBaseService.get(session, kb_id, user)
+@router.get("/{kb_id}", response_model=KnowledgeBaseResponse)
+def get_kb(kb_id: str, db: Session = Depends(get_db)):
+    kb = db.query(KnowledgeBaseModel).filter(KnowledgeBaseModel.id == kb_id).first()
     if not kb:
-        raise HTTPException(404, "Knowledge base not found")
-    return _kb_to_response(kb)
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+    return kb
 
 
-@router.patch("/{kb_id}", response_model=KBResponse)
-def update_kb(kb_id: str, req: KBUpdate, user: User = Depends(require_user), session: Session = Depends(get_db)):
-    kb = KnowledgeBaseService.update(
-        session, kb_id, user,
-        **req.model_dump(exclude_none=True),
-    )
+@router.put("/{kb_id}", response_model=KnowledgeBaseResponse)
+def update_kb(kb_id: str, kb_update: KnowledgeBaseUpdate, db: Session = Depends(get_db)):
+    kb = db.query(KnowledgeBaseModel).filter(KnowledgeBaseModel.id == kb_id).first()
     if not kb:
-        raise HTTPException(404, "Knowledge base not found")
-    return _kb_to_response(kb)
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+    update_data = kb_update.model_dump(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(kb, key, value)
+
+    db.commit()
+    db.refresh(kb)
+    return kb
 
 
 @router.delete("/{kb_id}")
-def delete_kb(kb_id: str, user: User = Depends(require_user), session: Session = Depends(get_db)):
-    ok = KnowledgeBaseService.delete(session, kb_id, user)
-    if not ok:
-        raise HTTPException(404, "Knowledge base not found")
+def delete_kb(kb_id: str, db: Session = Depends(get_db)):
+    kb = db.query(KnowledgeBaseModel).filter(KnowledgeBaseModel.id == kb_id).first()
+    if not kb:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+    db.delete(kb)
+    db.commit()
     return {"status": "deleted"}
 
 
@@ -120,65 +93,114 @@ def delete_kb(kb_id: str, user: User = Depends(require_user), session: Session =
 async def upload_document(
     kb_id: str,
     file: UploadFile = File(...),
-    user: User = Depends(require_user),
-    session: Session = Depends(get_db),
+    db: Session = Depends(get_db),
 ):
-    kb = KnowledgeBaseService.get(session, kb_id, user)
+    kb = db.query(KnowledgeBaseModel).filter(KnowledgeBaseModel.id == kb_id).first()
     if not kb:
-        raise HTTPException(404, "Knowledge base not found")
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
 
-    import tempfile, shutil
-    from pathlib import Path
+    kb_dir = UPLOAD_DIR / kb_id
+    kb_dir.mkdir(parents=True, exist_ok=True)
+    file_path = kb_dir / file.filename
 
-    suffix = Path(file.filename).suffix.lower()
-    allowed = {".txt", ".md", ".pdf", ".docx", ".markdown"}
-    if suffix not in allowed:
-        raise HTTPException(400, f"Unsupported file type: {suffix}")
+    with file_path.open("wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
 
-    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-        shutil.copyfileobj(file.file, tmp)
-        tmp_path = tmp.name
+    file_size = os.path.getsize(file_path)
 
-    doc = Document(
+    doc = DocumentModel(
         kb_id=kb_id,
         filename=file.filename,
-        file_type=suffix,
-        file_size=Path(tmp_path).stat().st_size,
-        status="pending",
+        file_path=str(file_path),
+        file_size=file_size,
+        status=DocumentStatus.PENDING,
     )
-    session.add(doc)
-    session.commit()
-    session.refresh(doc)
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
 
-    process_document.delay(doc.id, kb_id, tmp_path)
+    # Zero-dependency synchronous fallback when Redis/Celery is not running
+    use_celery = os.getenv("VELORAG_USE_CELERY", "0") == "1"
+    if use_celery:
+        try:
+            from velorag.tasks.document_tasks import process_document
+            process_document.delay(doc.id)
+            return doc
+        except Exception:
+            pass
 
-    return _doc_to_response(doc)
+    try:
+        doc.status = DocumentStatus.PARSING
+        db.commit()
+        rag = get_default_pipeline()
+        chunk_count = rag.ingest(str(file_path))
+        doc.chunk_count = chunk_count
+        doc.status = DocumentStatus.INDEXED
+        db.commit()
+        db.refresh(doc)
+    except Exception as e:
+        doc.status = DocumentStatus.FAILED
+        doc.error_msg = str(e)
+        db.commit()
+        db.refresh(doc)
+
+    return doc
+
+
+@router.post("/{kb_id}/texts", response_model=DocumentResponse)
+def ingest_raw_text_document(
+    kb_id: str,
+    payload: DirectTextCreate,
+    db: Session = Depends(get_db),
+):
+    kb = db.query(KnowledgeBaseModel).filter(KnowledgeBaseModel.id == kb_id).first()
+    if not kb:
+        raise HTTPException(status_code=404, detail="Knowledge base not found")
+
+    kb_dir = UPLOAD_DIR / kb_id
+    kb_dir.mkdir(parents=True, exist_ok=True)
+    file_path = kb_dir / payload.filename
+    file_path.write_text(payload.content, encoding="utf-8")
+
+    rag = get_default_pipeline()
+    chunk_count = rag.ingest_text(
+        text=payload.content,
+        source=payload.filename,
+        metadata={"kb_id": kb_id, "title": payload.filename},
+    )
+    doc = DocumentModel(
+        kb_id=kb_id,
+        filename=payload.filename,
+        file_path=str(file_path),
+        file_size=len(payload.content.encode("utf-8")),
+        chunk_count=chunk_count,
+        status=DocumentStatus.INDEXED,
+    )
+    db.add(doc)
+    db.commit()
+    db.refresh(doc)
+    return doc
 
 
 @router.get("/{kb_id}/documents", response_model=list[DocumentResponse])
-def list_documents(kb_id: str, user: User = Depends(require_user), session: Session = Depends(get_db)):
-    kb = KnowledgeBaseService.get(session, kb_id, user)
-    if not kb:
-        raise HTTPException(404, "Knowledge base not found")
-    docs = KnowledgeBaseService.get_documents(session, kb_id)
-    return [_doc_to_response(d) for d in docs]
-
-
-def _kb_to_response(kb) -> KBResponse:
-    doc_count = len(kb.documents) if kb.documents else 0
-    return KBResponse(
-        id=kb.id, name=kb.name, description=kb.description or "",
-        embedding_model=kb.embedding_model, chunk_strategy=kb.chunk_strategy,
-        chunk_size=kb.chunk_size, retrieval_mode=kb.retrieval_mode,
-        graph_enabled=kb.graph_enabled, document_count=doc_count,
-        created_at=kb.created_at.isoformat() if kb.created_at else "",
-        updated_at=kb.updated_at.isoformat() if kb.updated_at else "",
-    )
-
-
-def _doc_to_response(doc) -> DocumentResponse:
-    return DocumentResponse(
-        id=doc.id, filename=doc.filename, file_type=doc.file_type,
-        file_size=doc.file_size, status=doc.status, chunk_count=doc.chunk_count,
-        created_at=doc.created_at.isoformat() if doc.created_at else "",
-    )
+def list_documents(kb_id: str, db: Session = Depends(get_db)):
+    docs = db.query(DocumentModel).filter(DocumentModel.kb_id == kb_id).all()
+    if not docs and kb_id == "default":
+        from velorag.eval.dataset import get_builtin_campus_benchmark
+        builtin_docs, _ = get_builtin_campus_benchmark()
+        seeded = []
+        for bdoc in builtin_docs:
+            dm = DocumentModel(
+                id=bdoc.doc_id,
+                kb_id="default",
+                filename=bdoc.metadata.get("source", f"{bdoc.doc_id}.md"),
+                file_path=f"builtin://{bdoc.doc_id}",
+                file_size=len(bdoc.text.encode("utf-8")),
+                chunk_count=1,
+                status=DocumentStatus.INDEXED,
+            )
+            db.add(dm)
+            seeded.append(dm)
+        db.commit()
+        return seeded
+    return docs

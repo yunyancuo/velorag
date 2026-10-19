@@ -63,11 +63,27 @@ class InMemoryVectorStore(BaseVectorStore):
         for idx in top_indices:
             score = float(scores[idx])
             chunk_id = self._ids[idx]
+            chunk = self._chunks[chunk_id]
+            if filters:
+                matched = True
+                for k, v in filters.items():
+                    if k == "query":
+                        continue
+                    if k == "doc_id" and chunk.doc_id != v:
+                        matched = False
+                        break
+                    if k != "doc_id" and chunk.metadata.get(k) != v:
+                        matched = False
+                        break
+                if not matched:
+                    continue
             results.append(SearchResult(
-                chunk=self._chunks[chunk_id],
+                chunk=chunk,
                 score=score,
                 retrieval_source="dense",
             ))
+            if len(results) >= top_k:
+                break
         return results
 
     def delete(self, chunk_ids: list[str]):
@@ -150,6 +166,9 @@ def create_vector_store(settings: IndexSettings) -> BaseVectorStore:
     from velorag.core.types import VectorStoreBackend
 
     if settings.backend == VectorStoreBackend.CHROMA:
-        return ChromaVectorStore(settings)
+        try:
+            return ChromaVectorStore(settings)
+        except Exception:
+            return InMemoryVectorStore()
     else:
         return InMemoryVectorStore()

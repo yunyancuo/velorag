@@ -34,6 +34,7 @@ class HybridRetriever:
 
     def retrieve(self, query_embedding: list[float], context: QueryContext) -> list[SearchResult]:
         all_results: list[list[SearchResult]] = []
+        weights: list[float] = []
 
         if context.mode in (RetrievalMode.DENSE, RetrievalMode.HYBRID, RetrievalMode.GRAPH_ENHANCED):
             if self.vector_store:
@@ -43,7 +44,9 @@ class HybridRetriever:
                     self.vector_store,
                     context.filters,
                 )
-                all_results.append(min_max_normalize(dense_results))
+                if dense_results:
+                    all_results.append(min_max_normalize(dense_results))
+                    weights.append(self.settings.fusion_alpha)
 
         if context.mode in (RetrievalMode.SPARSE, RetrievalMode.HYBRID, RetrievalMode.GRAPH_ENHANCED):
             sparse_results = sparse_retrieval(
@@ -51,22 +54,33 @@ class HybridRetriever:
                 self.settings.sparse_top_k,
                 self._all_chunks,
                 self._bm25,
+                filters=context.filters,
             )
-            all_results.append(min_max_normalize(sparse_results))
+            if sparse_results:
+                all_results.append(min_max_normalize(sparse_results))
+                weights.append(1.0 - self.settings.fusion_alpha)
 
-        if context.mode == RetrievalMode.GRAPH_ENHANCED and context.use_graph and self.knowledge_graph:
-            graph_results = self._graph_enhanced_retrieval(context.query, query_embedding)
+        if (
+            context.mode in (RetrievalMode.HYBRID, RetrievalMode.GRAPH_ENHANCED)
+            and context.use_graph
+            and self.knowledge_graph
+        ):
+            graph_results = self._graph_enhanced_retrieval(context.query, context.filters)
             if graph_results:
                 all_results.append(min_max_normalize(graph_results))
+                weights.append(0.35)
 
         if not all_results:
             return []
 
-        fused = reciprocal_rank_fusion(all_results)
-        return fused[:context.top_k]
+        if len(all_results) == 1:
+            return all_results[0][: context.top_k]
+
+        fused = reciprocal_rank_fusion(all_results, weights=weights)
+        return fused[: context.top_k]
 
     def _graph_enhanced_retrieval(
-        self, query: str, query_embedding: list[float]
+        self, query: str, filters: dict | None = None
     ) -> list[SearchResult]:
         if not self.knowledge_graph:
             return []
@@ -75,24 +89,33 @@ class HybridRetriever:
         if not entities:
             return []
 
-        all_chunk_ids: set[str] = set()
+        chunk_best_score: dict[str, float] = {}
         for entity in entities:
-            chunk_ids = self.knowledge_graph.get_chunks_for_entity(
+            dist_map = self.knowledge_graph.get_chunks_with_distance(
                 entity.id, self.knowledge_graph.settings.max_entity_distance
             )
-            all_chunk_ids.update(chunk_ids)
+            for cid, hop in dist_map.items():
+                hop_score = 1.0 / (1.0 + 0.35 * hop)
+                chunk_best_score[cid] = chunk_best_score.get(cid, 0.0) + hop_score
 
-        if not all_chunk_ids:
+        if not chunk_best_score:
             return []
 
         chunk_map = {c.id: c for c in self._all_chunks}
-        results = []
-        for cid in all_chunk_ids:
-            if cid in chunk_map:
-                results.append(SearchResult(
-                    chunk=chunk_map[cid],
-                    score=0.8,
+        results: list[SearchResult] = []
+        for cid, score in sorted(chunk_best_score.items(), key=lambda x: x[1], reverse=True):
+            if cid not in chunk_map:
+                continue
+            chunk = chunk_map[cid]
+            if filters:
+                if "doc_id" in filters and chunk.doc_id != filters["doc_id"]:
+                    continue
+            results.append(
+                SearchResult(
+                    chunk=chunk,
+                    score=float(score),
                     retrieval_source="graph",
-                ))
+                )
+            )
 
         return results

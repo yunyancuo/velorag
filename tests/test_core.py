@@ -44,22 +44,15 @@ def test_chunker_strategies():
 
 
 def test_embedding_in_memory():
-    import pytest
     from velorag.core.settings import EmbeddingSettings
     from velorag.core.types import EmbeddingBackend
-
-    try:
-        import sentence_transformers
-    except ImportError:
-        pytest.skip("sentence-transformers not installed")
-
     from velorag.embedding.embedder import create_embedder
-    settings = EmbeddingSettings(backend=EmbeddingBackend.SENTENCE_TRANSFORMER, model_name="all-MiniLM-L6-v2")
 
-    try:
-        embedder = create_embedder(settings)
-    except OSError:
-        pytest.skip("Cannot download model (offline)")
+    settings = EmbeddingSettings(backend=EmbeddingBackend.SENTENCE_TRANSFORMER, model_name="all-MiniLM-L6-v2")
+    embedder = create_embedder(settings)
+    vecs = embedder.embed(["hello velorag", "混合检索知识图谱"])
+    assert len(vecs) == 2
+    assert len(vecs[0]) == embedder.dimension
 
 
 def test_vector_store():
@@ -157,16 +150,8 @@ def test_registry():
 
 
 def test_pipeline_smoke():
-    import pytest
-
-    try:
-        from sentence_transformers import SentenceTransformer
-    except ImportError:
-        pytest.skip("sentence-transformers not installed")
-
     from velorag.pipeline import VeloRAG
     from velorag.core.settings import Settings
-    from velorag.core.types import Chunk
 
     settings = Settings()
     settings.index.num_shards = 1
