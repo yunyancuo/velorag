@@ -108,7 +108,11 @@ class HybridRetriever:
                 continue
             chunk = chunk_map[cid]
             if filters:
-                if "doc_id" in filters and chunk.doc_id != filters["doc_id"]:
+                if any(
+                    (chunk.doc_id if key == "doc_id" else chunk.metadata.get(key)) != value
+                    for key, value in filters.items()
+                    if key != "query"
+                ):
                     continue
             results.append(
                 SearchResult(

@@ -33,7 +33,7 @@ const KBDetail: React.FC = () => {
     <div className="page">
       <div className="page-header">
         <h2>{kb.name}</h2>
-        <span className="badge">{kb.retrieval_mode}</span>
+        <span className="badge">{kb.chunk_size} characters per chunk</span>
       </div>
       <p style={{color:"#666"}}>{kb.description}</p>
 
@@ -43,8 +43,8 @@ const KBDetail: React.FC = () => {
           <span className="stat-label">Documents</span>
         </div>
         <div className="stat">
-          <span className="stat-value">{kb.chunk_strategy}</span>
-          <span className="stat-label">Chunking</span>
+          <span className="stat-value">{kb.chunk_overlap}</span>
+          <span className="stat-label">Chunk Overlap</span>
         </div>
         <div className="stat">
           <span className="stat-value">{kb.embedding_model}</span>

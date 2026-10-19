@@ -72,8 +72,8 @@ const KnowledgeBases: React.FC = () => {
             </Link>
             <p>{kb.description}</p>
             <div className="kb-meta">
-              <span>{kb.document_count} documents</span>
-              <span>{kb.retrieval_mode}</span>
+              <span>{kb.chunk_size} characters per chunk</span>
+              <span>{kb.embedding_model}</span>
             </div>
             <div className="kb-actions">
               <Link to={`/search/${kb.id}`}>
