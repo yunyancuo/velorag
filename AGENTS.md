@@ -24,6 +24,10 @@ no new retrieval algorithm or large-corpus quality improvement has been proven.
 NEAR-inspired exact residual index and real BGE/SciFact pilot. Development chose
 residual weight zero; do not claim an improvement. C1 incremental maintenance
 remains unimplemented. Follow corrected raw results; the pre-audit run is invalid.
+The experimental branch passed 56 Python tests. The fixed 40-query learned
+cross-encoder challenger also showed no gain. Independent reconstruction checked
+validation metrics and candidate fairness; preserve the documented environment
+and development trace when reproducing nonzero residual results.
 
 ## Repository map
 
