@@ -142,11 +142,27 @@ class VeloRAG:
         mode: str = "hybrid",
         use_graph: bool = True,
         filters: dict | None = None,
+        candidate_k: int | None = None,
     ) -> list[SearchResult]:
+        """Retrieve candidates, rerank them, then select the final top_k results.
+
+        candidate_k limits the fused candidate pool, independently of top_k.
+        Individual retrieval sources retain their configured search depths.
+        """
+        if top_k < 1:
+            raise ValueError("top_k must be positive")
+        if candidate_k is None:
+            candidate_k = max(
+                top_k,
+                self.settings.retrieval.dense_top_k if self.reranker else top_k,
+                self.settings.retrieval.sparse_top_k if self.reranker else top_k,
+            )
+        if candidate_k < top_k:
+            raise ValueError("candidate_k must be at least top_k")
         actual_mode = "hybrid" if mode == "graph_enhanced" else mode
         actual_graph = True if mode == "graph_enhanced" else use_graph
 
-        cache_key = f"search:{query}:{top_k}:{actual_mode}:{actual_graph}:{filters}"
+        cache_key = f"search:{query}:{top_k}:{candidate_k}:{actual_mode}:{actual_graph}:{filters}"
         cached = self.cache.get(cache_key)
         if cached:
             return cached
@@ -155,7 +171,7 @@ class VeloRAG:
 
         context = QueryContext(
             query=query,
-            top_k=top_k,
+            top_k=candidate_k,
             mode=RetrievalMode(actual_mode),
             use_graph=actual_graph,
             filters=filters or {},
@@ -169,6 +185,7 @@ class VeloRAG:
         if self.settings.retrieval.min_score_threshold > 0:
             results = [r for r in results if r.score >= self.settings.retrieval.min_score_threshold]
 
+        results = results[:top_k]
         self.cache.set(cache_key, results)
         return results
 
