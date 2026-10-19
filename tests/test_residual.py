@@ -81,9 +81,31 @@ def test_reloaded_vector_store_is_used_without_current_process_ingestion():
     chunk = Chunk(id="persisted", text="Slurm GPU scheduling", doc_id="saved", metadata={"kb_id": "a"})
     store.add([chunk], rag.embedder.embed([chunk.text]))
     rag.vector_store = store
+    rag.retriever.vector_store = store
     assert rag.get_chunks() == []
+    baseline = rag.search("Slurm GPU", mode="hybrid", use_graph=False, filters={"kb_id": "a"})
+    assert baseline and "sparse" in baseline[0].retrieval_source
     hits = rag.search("Slurm GPU", mode="residual_hybrid", filters={"kb_id": "a"})
     assert hits and hits[0].chunk.doc_id == "saved"
+
+
+def test_sharded_snapshot_deduplicates_aliased_stores_and_rejects_conflicts():
+    from velorag.core.settings import IndexSettings
+    from velorag.indexing.sharding import ShardedIndex
+    from velorag.indexing.vector_store import InMemoryVectorStore
+    store = InMemoryVectorStore()
+    chunk = Chunk(id="shared", doc_id="d", text="shared evidence")
+    store.add([chunk], [[1, 0]])
+    index = ShardedIndex(IndexSettings(num_shards=2), lambda _: store)
+    chunks, embeddings = index.snapshot()
+    assert chunks == [chunk] and embeddings == [[1, 0]]
+    assert len(index.search([1, 0])) == 1
+    ResidualIndex().fit(chunks, embeddings)
+    conflicting = InMemoryVectorStore()
+    conflicting.add([chunk], [[0, 1]])
+    index._shards = [store, conflicting]
+    with pytest.raises(ValueError, match="Conflicting duplicate"):
+        index.snapshot()
 
 
 def test_chroma_snapshot_reconstructs_aligned_persisted_chunks_and_vectors():

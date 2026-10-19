@@ -61,6 +61,7 @@ class VeloRAG:
         self.generator = LLMGenerator()
         self.cache = MemoryCache(max_entries=self.settings.cache.max_entries)
         self._all_chunks: list[Chunk] = []
+        self._corpus_loaded = False
         self._residual_config = residual_config or ResidualConfig()
         self._residual_retriever: HybridRetriever | None = None
 
@@ -127,6 +128,7 @@ class VeloRAG:
     def _index_chunks(self, chunks: list[Chunk]):
         if not chunks:
             return
+        self._ensure_corpus_loaded()
 
         texts = [c.text for c in chunks]
         embeddings = self.embedder.embed(texts)
@@ -135,10 +137,21 @@ class VeloRAG:
             self.knowledge_graph.extract_from_chunks(chunks)
 
         self.vector_store.add(chunks, embeddings)
-        self._all_chunks.extend(chunks)
+        self._all_chunks = list({c.id: c for c in [*self._all_chunks, *chunks]}.values())
         self.retriever.set_chunks(self._all_chunks)
         self._residual_retriever = None
         self.cache.clear()
+
+    def _ensure_corpus_loaded(self):
+        """Restore the same sparse corpus for baseline and experimental modes."""
+        if not self._corpus_loaded:
+            try:
+                chunks, _ = self.vector_store.snapshot()
+            except (NotImplementedError, AttributeError):
+                chunks = self._all_chunks
+            self._all_chunks = chunks
+            self.retriever.set_chunks(chunks)
+            self._corpus_loaded = True
 
     def _get_residual_retriever(self) -> HybridRetriever:
         if self._residual_retriever is None:
@@ -181,6 +194,7 @@ class VeloRAG:
             )
         if candidate_k < top_k:
             raise ValueError("candidate_k must be at least top_k")
+        self._ensure_corpus_loaded()
         residual_mode = mode in ("local_residual", "residual_hybrid")
         actual_mode = {
             "local_residual": "dense", "residual_hybrid": "hybrid",

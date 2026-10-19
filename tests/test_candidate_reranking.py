@@ -9,6 +9,9 @@ class ControlledRetriever:
     def __init__(self):
         self.depths = []
 
+    def set_chunks(self, chunks):
+        pass
+
     def retrieve(self, query_embedding, context):
         self.depths.append(context.top_k)
         return [

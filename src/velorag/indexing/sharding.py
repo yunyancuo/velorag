@@ -54,8 +54,12 @@ class ShardedIndex:
             results = shard.search(query_embedding, per_shard_k, filters)
             all_results.extend(results)
 
-        all_results.sort(key=lambda x: x.score, reverse=True)
-        return all_results[:top_k]
+        # Legacy persistent shard factories can alias the same collection.
+        unique = {}
+        for result in all_results:
+            if result.chunk.id not in unique or result.score > unique[result.chunk.id].score:
+                unique[result.chunk.id] = result
+        return sorted(unique.values(), key=lambda x: x.score, reverse=True)[:top_k]
 
     def delete(self, chunk_ids: list[str]):
         for chunk_id in chunk_ids:
@@ -65,12 +69,19 @@ class ShardedIndex:
         return sum(s.count() for s in self.shards if s)
 
     def snapshot(self):
-        chunks, embeddings = [], []
+        records = {}
         for shard in self.shards:
             shard_chunks, shard_embeddings = shard.snapshot()
-            chunks.extend(shard_chunks)
-            embeddings.extend(shard_embeddings)
-        return chunks, embeddings
+            if len(shard_chunks) != len(shard_embeddings):
+                raise ValueError("Shard snapshot chunk/embedding counts differ")
+            for chunk, embedding in zip(shard_chunks, shard_embeddings):
+                if chunk.id in records:
+                    old_chunk, old_embedding = records[chunk.id]
+                    if old_chunk != chunk or not np.array_equal(old_embedding, embedding):
+                        raise ValueError(f"Conflicting duplicate chunk in shard snapshots: {chunk.id}")
+                else:
+                    records[chunk.id] = (chunk, embedding)
+        return ([r[0] for r in records.values()], [r[1] for r in records.values()])
 
 
 class InMemoryShard(BaseVectorStore):
