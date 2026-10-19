@@ -143,10 +143,17 @@ class VeloRAG:
     def _get_residual_retriever(self) -> HybridRetriever:
         if self._residual_retriever is None:
             index = ResidualIndex(self._residual_config)
-            if self._all_chunks:
-                index.fit(self._all_chunks, self.embedder.embed([c.text for c in self._all_chunks]))
+            try:
+                chunks, embeddings = self.vector_store.snapshot()
+            except (NotImplementedError, AttributeError):
+                if self.vector_store.count() != len(self._all_chunks):
+                    raise RuntimeError("Residual retrieval requires a complete vector-store snapshot")
+                chunks = self._all_chunks
+                embeddings = self.embedder.embed([c.text for c in chunks]) if chunks else []
+            if chunks:
+                index.fit(chunks, embeddings)
             retriever = HybridRetriever(self.settings.retrieval, index, knowledge_graph=None)
-            retriever.set_chunks(self._all_chunks)
+            retriever.set_chunks(chunks)
             self._residual_retriever = retriever
         return self._residual_retriever
 

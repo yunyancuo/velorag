@@ -195,6 +195,7 @@ def reciprocal_rank_fusion(
             )
         )
 
+    fused.sort(key=lambda result: result.score, reverse=True)
     return fused
 
 

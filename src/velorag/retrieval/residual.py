@@ -20,6 +20,15 @@ def unit_rows(values):
     return values / np.maximum(np.linalg.norm(values, axis=-1, keepdims=True), 1e-8)
 
 
+def projection_residual(values, references):
+    """Suppress cancellation noise before normalizing unit-vector residuals."""
+    values = np.asarray(values, dtype=np.float64)
+    references = np.asarray(references, dtype=np.float64)
+    residual = values - np.sum(values * references, axis=-1, keepdims=True) * references
+    norms = np.linalg.norm(residual, axis=-1, keepdims=True)
+    return np.where(norms > 1e-6, residual / np.maximum(norms, 1e-6), 0).astype(np.float32)
+
+
 @dataclass(frozen=True)
 class ResidualConfig:
     neighbors: int = 16
@@ -97,8 +106,7 @@ class ResidualIndex(BaseVectorStore):
                 similarities[np.arange(stop - start), np.arange(start, stop)] = -np.inf
                 neighbors = np.argpartition(similarities, n - k, axis=1)[:, -k:]
                 references[start:stop] = unit_rows(self._vectors[neighbors].mean(axis=1))
-        projection = np.sum(self._vectors * references, axis=1, keepdims=True)
-        residuals = unit_rows(self._vectors - projection * references)
+        residuals = projection_residual(self._vectors, references)
 
         rng = np.random.default_rng(self.config.seed)
         chosen = rng.choice(n, size=min(self.config.anchors, n), replace=False)
@@ -118,12 +126,14 @@ class ResidualIndex(BaseVectorStore):
         self._anchors = anchors
         self._anchor_references = anchor_references
         self._keys = np.concatenate([
-            np.sqrt(1 - self.config.weight) * self._vectors,
-            np.sqrt(self.config.weight) * residuals,
+            self._vectors, residuals,
         ], axis=1)
         self.build_seconds = time.perf_counter() - started
 
-    def query_key(self, query_embedding):
+    def query_key(self, query_embedding, weight_override=None):
+        weight = self.config.weight if weight_override is None else weight_override
+        if not np.isfinite(weight) or not 0 <= weight <= 1:
+            raise ValueError("weight must be finite and in [0, 1]")
         query = np.asarray(query_embedding, dtype=np.float32)
         if query.shape != (self.dimension,) or not np.isfinite(query).all():
             raise ValueError("Query must be finite and match the index dimension")
@@ -135,16 +145,15 @@ class ResidualIndex(BaseVectorStore):
         weights = np.exp(logits - logits.max())
         weights /= weights.sum()
         reference = unit_rows(weights @ self._anchor_references[selected])
-        residual = unit_rows(query - np.dot(query, reference) * reference)
+        residual = projection_residual(query, reference)
         return np.concatenate([
-            np.sqrt(1 - self.config.weight) * query,
-            np.sqrt(self.config.weight) * residual,
+            (1 - weight) * query, weight * residual,
         ])
 
-    def scores(self, query_embedding):
+    def scores(self, query_embedding, weight_override=None):
         if not self.count():
             return np.empty(0, dtype=np.float32)
-        return self._keys @ self.query_key(query_embedding)
+        return self._keys @ self.query_key(query_embedding, weight_override)
 
     def search(self, query_embedding, top_k=10, filters=None):
         if top_k < 1:

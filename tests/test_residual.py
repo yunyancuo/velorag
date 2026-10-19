@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from velorag.core.config import EmbeddingConfig, KnowledgeGraphConfig, VeloRAGConfig
-from velorag.core.types import Chunk, EmbeddingBackend
+from velorag.core.types import Chunk, EmbeddingBackend, SearchResult
 from velorag.pipeline import VeloRAG
 from velorag.retrieval.residual import ResidualConfig, ResidualIndex, unit_rows
 
@@ -52,6 +52,61 @@ def test_singleton_duplicates_and_zero_vectors_are_finite():
     index.fit([Chunk(id=str(i)) for i in range(3)], [[0, 0], [1, 0], [1, 0]])
     assert np.isfinite(index.scores([0, 0])).all()
     assert np.isfinite(index.scores([1, 0])).all()
+
+
+@pytest.mark.parametrize("seed", [0, 1, 7, 19])
+def test_collinear_float32_cancellation_is_not_a_residual_signal(seed):
+    vector = np.random.default_rng(seed).normal(size=384).astype(np.float32)
+    index = ResidualIndex(ResidualConfig(weight=1))
+    index.fit([Chunk(id=str(i)) for i in range(3)], [vector, vector, vector])
+    np.testing.assert_array_equal(index._keys[:, 384:], 0)
+    np.testing.assert_allclose(index.scores(vector), 0, atol=1e-7)
+
+
+def test_query_weight_override_is_equivalent_to_weighted_inner_product():
+    index, _, vectors = fixture_index(weight=1)
+    query = [1, 0.2, 0]
+    base = unit_rows(vectors) @ unit_rows(query)
+    residual = index.scores(query)
+    np.testing.assert_allclose(index.scores(query, weight_override=0.3),
+                               0.7 * base + 0.3 * residual, atol=1e-6)
+
+
+def test_reloaded_vector_store_is_used_without_current_process_ingestion():
+    from velorag.indexing.vector_store import InMemoryVectorStore
+    rag = VeloRAG(config=VeloRAGConfig(
+        embedding=EmbeddingConfig(backend=EmbeddingBackend.HASH, dimension=64),
+    ))
+    store = InMemoryVectorStore()
+    chunk = Chunk(id="persisted", text="Slurm GPU scheduling", doc_id="saved", metadata={"kb_id": "a"})
+    store.add([chunk], rag.embedder.embed([chunk.text]))
+    rag.vector_store = store
+    assert rag.get_chunks() == []
+    hits = rag.search("Slurm GPU", mode="residual_hybrid", filters={"kb_id": "a"})
+    assert hits and hits[0].chunk.doc_id == "saved"
+
+
+def test_chroma_snapshot_reconstructs_aligned_persisted_chunks_and_vectors():
+    from velorag.indexing.vector_store import ChromaVectorStore
+    class Collection:
+        def get(self, include):
+            return {"ids": ["saved"], "documents": ["persisted text"],
+                    "metadatas": [{"doc_id": "d", "kb_id": "a"}],
+                    "embeddings": np.array([[1, 0]], dtype=np.float32)}
+    store = ChromaVectorStore.__new__(ChromaVectorStore)
+    store._collection = Collection()
+    chunks, vectors = store.snapshot()
+    assert chunks[0].doc_id == "d" and chunks[0].metadata == {"kb_id": "a"}
+    assert vectors == [[1, 0]]
+
+
+def test_fused_results_follow_their_emitted_scores():
+    from velorag.retrieval.engine import reciprocal_rank_fusion
+    chunks = {cid: Chunk(id=cid) for cid in "abcd"}
+    a = [SearchResult(chunks[cid], score, "dense") for cid, score in (("a", 0), ("b", 1), ("c", 0))]
+    b = [SearchResult(chunks[cid], score, "sparse") for cid, score in (("a", 0), ("d", 1), ("c", 0))]
+    fused = reciprocal_rank_fusion([a, b])
+    assert [r.score for r in fused] == sorted([r.score for r in fused], reverse=True)
 
 
 def test_add_upsert_delete_and_full_rebuild_are_consistent():

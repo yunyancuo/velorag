@@ -12,6 +12,10 @@ from velorag.core.types import Chunk, SearchResult
 
 
 class BaseVectorStore(ABC):
+    def snapshot(self) -> tuple[list[Chunk], list[list[float]]]:
+        """Export aligned chunks/vectors for opt-in derived indexes."""
+        raise NotImplementedError("This store cannot export its persisted vectors")
+
     @abstractmethod
     def add(self, chunks: list[Chunk], embeddings: list[list[float]]):
         ...
@@ -39,6 +43,11 @@ class InMemoryVectorStore(BaseVectorStore):
     @property
     def dimension(self) -> int:
         return self._dimension
+
+    def snapshot(self):
+        latest = {cid: i for i, cid in enumerate(self._ids)}
+        return ([self._chunks[cid] for cid in latest],
+                [self._embeddings[i].tolist() for i in latest.values()])
 
     def add(self, chunks: list[Chunk], embeddings: list[list[float]]):
         for chunk, emb in zip(chunks, embeddings):
@@ -160,6 +169,22 @@ class ChromaVectorStore(BaseVectorStore):
 
     def count(self) -> int:
         return self._collection.count()
+
+    def snapshot(self):
+        data = self._collection.get(include=["documents", "metadatas", "embeddings"])
+        if not data["ids"]:
+            return [], []
+        if data.get("embeddings") is None:
+            raise ValueError("Persisted collection did not return embeddings")
+        chunks = []
+        for i, cid in enumerate(data["ids"]):
+            metadata = dict(data["metadatas"][i] or {})
+            chunks.append(Chunk(
+                id=cid, doc_id=metadata.pop("doc_id", ""),
+                text=data["documents"][i] or "", metadata=metadata,
+                chunk_index=int(metadata.get("chunk_index", 0)),
+            ))
+        return chunks, np.asarray(data["embeddings"], dtype=np.float32).tolist()
 
 
 def create_vector_store(settings: IndexSettings) -> BaseVectorStore:

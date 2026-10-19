@@ -64,6 +64,14 @@ class ShardedIndex:
     def count(self) -> int:
         return sum(s.count() for s in self.shards if s)
 
+    def snapshot(self):
+        chunks, embeddings = [], []
+        for shard in self.shards:
+            shard_chunks, shard_embeddings = shard.snapshot()
+            chunks.extend(shard_chunks)
+            embeddings.extend(shard_embeddings)
+        return chunks, embeddings
+
 
 class InMemoryShard(BaseVectorStore):
     def __init__(self, dimension: int = 384):
@@ -113,3 +121,8 @@ class InMemoryShard(BaseVectorStore):
 
     def count(self) -> int:
         return len(self._ids)
+
+    def snapshot(self):
+        latest = {cid: i for i, cid in enumerate(self._ids)}
+        return ([self._chunks[cid] for cid in latest],
+                [self._embeddings[i].tolist() for i in latest.values()])

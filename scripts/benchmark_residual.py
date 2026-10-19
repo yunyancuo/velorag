@@ -37,11 +37,24 @@ def load_data(folder, query_count, dev_count, seed):
     corpus = [json.loads(line) for line in (folder / "corpus.jsonl").read_text(encoding="utf-8").splitlines()]
     corpus.sort(key=lambda doc: str(doc["_id"]))
     ids = {str(doc["_id"]) for doc in corpus}
-    queries = {str(q["_id"]): q["text"] for q in map(json.loads, (folder / "queries.jsonl").read_text(encoding="utf-8").splitlines())}
+    if len(ids) != len(corpus):
+        raise ValueError("Duplicate corpus IDs")
+    query_rows = list(map(json.loads, (folder / "queries.jsonl").read_text(encoding="utf-8").splitlines()))
+    queries = {str(q["_id"]): q["text"] for q in query_rows}
+    if len(queries) != len(query_rows):
+        raise ValueError("Duplicate query IDs")
     qrels = {}
+    qrel_rows = positive_rows = 0
+    pairs = set()
     with (folder / "qrels/train.tsv").open(encoding="utf-8", newline="") as source:
         for row in csv.DictReader(source, delimiter="\t"):
+            qrel_rows += 1
+            pair = (row["query-id"], row["corpus-id"])
+            if pair in pairs:
+                raise ValueError("Duplicate query-document relevance pair")
+            pairs.add(pair)
             if int(row["score"]) > 0:
+                positive_rows += 1
                 qrels.setdefault(row["query-id"], set()).add(row["corpus-id"])
     if any(not relevant <= ids for relevant in qrels.values()):
         raise ValueError("Relevant documents are missing from the corpus")
@@ -51,7 +64,11 @@ def load_data(folder, query_count, dev_count, seed):
     random.Random(seed).shuffle(selected)
     if not 0 < dev_count < query_count <= len(selected):
         raise ValueError("Require 0 < dev_count < query_count <= judged training queries")
-    return corpus, queries, qrels, selected[:dev_count], selected[dev_count:query_count]
+    flow = {"corpus_rows": len(corpus), "query_rows": len(query_rows),
+            "qrel_rows": qrel_rows, "positive_qrel_rows": positive_rows,
+            "judged_positive_query_ids": len(qrels), "selected_queries": query_count,
+            "development_queries": dev_count, "validation_queries": query_count - dev_count}
+    return corpus, queries, qrels, selected[:dev_count], selected[dev_count:query_count], flow
 
 
 def embed_data(folder, corpus, queries, selected, cache_dir, threads):
@@ -114,19 +131,36 @@ def fuse(dense, sparse, depth):
 
 
 def query_rankings(query, qvector, vectors, index, chunks, bm25, weight, depth):
-    dense_scores = vectors @ qvector
-    residual_scores = (1 - weight) * dense_scores + weight * index.scores(qvector)
-    dense = top_results(dense_scores, chunks, depth, "dense")
-    residual = top_results(residual_scores, chunks, depth, "local_residual")
-    sparse = bm25.search(query, top_k=depth)
-    hybrid, residual_hybrid = fuse(dense, sparse, depth), fuse(residual, sparse, depth)
+    def timed(fn):
+        start = time.perf_counter()
+        value = fn()
+        return value, (time.perf_counter() - start) * 1000
+
+    dense_scores, dense_ms = timed(lambda: vectors @ qvector)
+    residual_scores, residual_ms = timed(lambda: index.scores(qvector, weight_override=weight))
+    dense, dense_rank_ms = timed(lambda: top_results(dense_scores, chunks, depth, "dense"))
+    residual, residual_rank_ms = timed(lambda: top_results(residual_scores, chunks, depth, "local_residual"))
+    sparse, sparse_ms = timed(lambda: bm25.search(query, top_k=depth))
+    hybrid, hybrid_ms = timed(lambda: fuse(dense, sparse, depth))
+    residual_hybrid, residual_hybrid_ms = timed(lambda: fuse(residual, sparse, depth))
     reranker = LexicalOverlapReranker()
-    return {
+    hybrid_reranked, hybrid_rerank_ms = timed(lambda: reranker.rerank(query, hybrid))
+    residual_reranked, residual_rerank_ms = timed(lambda: reranker.rerank(query, residual_hybrid))
+    ranks = {
         "bm25": sparse, "dense": dense, "local_residual": residual,
         "hybrid": hybrid, "residual_hybrid": residual_hybrid,
-        "hybrid_lexical_rerank": reranker.rerank(query, hybrid),
-        "residual_hybrid_lexical_rerank": reranker.rerank(query, residual_hybrid),
+        "hybrid_lexical_rerank": hybrid_reranked,
+        "residual_hybrid_lexical_rerank": residual_reranked,
     }
+    timings = {
+        "bm25": sparse_ms, "dense": dense_ms + dense_rank_ms,
+        "local_residual": residual_ms + residual_rank_ms,
+        "hybrid": dense_ms + dense_rank_ms + sparse_ms + hybrid_ms,
+        "residual_hybrid": residual_ms + residual_rank_ms + sparse_ms + residual_hybrid_ms,
+    }
+    timings["hybrid_lexical_rerank"] = timings["hybrid"] + hybrid_rerank_ms
+    timings["residual_hybrid_lexical_rerank"] = timings["residual_hybrid"] + residual_rerank_ms
+    return ranks, timings
 
 
 def summarize(rows, k, depth):
@@ -135,11 +169,13 @@ def summarize(rows, k, depth):
         f"recall_at_{k}": float(np.mean([r["modes"][mode]["recall"] for r in rows])),
         f"ndcg_at_{k}": float(np.mean([r["modes"][mode]["ndcg"] for r in rows])),
         f"candidate_recall_at_{depth}": float(np.mean([r["modes"][mode]["candidate_recall"] for r in rows])),
+        "retrieval_component_p50_ms": float(np.percentile([r["modes"][mode]["elapsed_ms"] for r in rows], 50)),
+        "retrieval_component_p95_ms": float(np.percentile([r["modes"][mode]["elapsed_ms"] for r in rows], 95)),
     } for mode in modes}
 
 
 def main(args):
-    corpus, queries, qrels, dev, validation = load_data(args.dataset, args.queries, args.dev_queries, args.seed)
+    corpus, queries, qrels, dev, validation, flow = load_data(args.dataset, args.queries, args.dev_queries, args.seed)
     selected = dev + validation
     vectors, qvectors, embedding_meta = embed_data(args.dataset, corpus, queries, selected, args.cache, args.threads)
     query_vectors = dict(zip(selected, qvectors))
@@ -156,7 +192,7 @@ def main(args):
     def evaluate(qids, weight):
         rows = []
         for qid in qids:
-            ranks = query_rankings(queries[qid], query_vectors[qid], vectors, index, chunks, bm25, weight, args.candidates)
+            ranks, timings = query_rankings(queries[qid], query_vectors[qid], vectors, index, chunks, bm25, weight, args.candidates)
             modes = {}
             for mode, results in ranks.items():
                 ids = [r.chunk.doc_id for r in results]
@@ -164,6 +200,8 @@ def main(args):
                     "recall": recall_at_k(ids, qrels[qid], args.top_k),
                     "ndcg": ndcg_at_k(ids, qrels[qid], args.top_k),
                     "candidate_recall": recall_at_k(ids, qrels[qid], args.candidates),
+                    "candidate_count": len(ids), "final_count": min(len(ids), args.top_k),
+                    "elapsed_ms": timings[mode],
                     "top_ids": ids[:args.top_k],
                 }
             rows.append({"query_id": qid, "relevant_ids": sorted(qrels[qid]), "modes": modes})
@@ -192,11 +230,13 @@ def main(args):
         "dataset_sha256": {str(p.relative_to(args.dataset)): file_hash(p) for p in (
             args.dataset / "corpus.jsonl", args.dataset / "queries.jsonl", args.dataset / "qrels/train.tsv")},
         "corpus_size": len(corpus), "development_query_ids": dev,
+        "sample_flow": flow,
         "validation_query_ids": validation, "embedding": embedding_meta,
         "top_k": args.top_k, "candidate_k_per_source": args.candidates,
         "index": index.stats(), "effective_residual_config": {**asdict(config), "weight": chosen},
         "weight_grid": list(WEIGHTS), "selection_metric": f"development residual_hybrid {metric_name}",
         "selected_weight": chosen, "development": tuning,
+        "timing_definition": "cached query embeddings; serial component timings summed for composite modes; not end-to-end API latency or a throughput benchmark",
         "validation": summarize(rows, args.top_k, args.candidates), "per_query_validation": rows,
         "limitations": [
             "Single public dataset; no large-corpus, streaming-update, multilingual, or business-data validation.",
