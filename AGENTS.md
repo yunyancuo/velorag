@@ -10,9 +10,15 @@ VeloRAG is a retrieval algorithm research project targeting retrieval quality in
 large knowledge bases. The application, Canvas, citations, and campus examples
 support implementation and evaluation. They do not define the research objective.
 
-The corpus size, domain, languages, available hardware, and representative failed
-queries have not yet been supplied. Do not treat a particular scale or failure
-mechanism as an established user requirement or measured result.
+The user confirmed that no real corpus is available and requires meaningful
+algorithmic differentiation from market RAG products. Public benchmarks and
+controlled stress tests may be used to develop the idea. Corpus scale, target
+domain, languages, and available hardware remain unspecified. Do not treat a
+particular scale or failure mechanism as an established requirement or result.
+
+The current proposed research focus and prior-art challenges are documented in
+`docs/research/001-differentiation.md`. Its pilot direction remains a hypothesis;
+no new retrieval algorithm or large-corpus quality improvement has been proven.
 
 ## Repository map
 
@@ -35,8 +41,8 @@ development check, not evidence of large-corpus retrieval performance.
 
 - Separate implementation bugs, representation errors, candidate recall losses,
   ranking errors, and evidence coverage failures before attributing results to scale.
-- Measure candidate recall before and after reranking. The current retriever
-  truncates fusion output to final top_k before the pipeline reranker runs.
+- Measure candidate recall before and after reranking. The research branch now
+  separates `candidate_k` from final `top_k`, then truncates after reranking.
 - Compare improvements with a corrected and appropriately tuned baseline.
 - Fix the query/evidence set while varying corpus size and distractor type;
   disclose incomplete relevance labels and accidental relevant distractors.
