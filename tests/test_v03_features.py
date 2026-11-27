@@ -119,6 +119,7 @@ def test_evaluation_runner_suite():
 
 def test_fastapi_endpoints():
     from fastapi.testclient import TestClient
+
     from velorag.server.app import app
 
     with TestClient(app) as client:
