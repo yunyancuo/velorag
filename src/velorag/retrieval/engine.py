@@ -3,22 +3,51 @@ from __future__ import annotations
 import math
 import re
 from collections import Counter
-from typing import Optional
+from typing import Any
 
 import numpy as np
 
-from velorag.core.settings import RetrievalSettings
-from velorag.core.types import Chunk, QueryContext, SearchResult, RetrievalMode
-
+from velorag.core.types import Chunk, SearchResult
 
 _CJK_STOP_CHARS = frozenset("的了在是和与或及对为以于中上下有个什么吗呢请问可后内前")
 
 
+def matches_filters(chunk: Chunk, filters: dict[str, Any] | None) -> bool:
+    """统一判断 Chunk 是否满足全部元数据过滤条件（支持精确值、$in 与 $nin）。"""
+    if not filters:
+        return True
+
+    for key, expected in filters.items():
+        if key == "query":
+            continue
+
+        actual = chunk.doc_id if key == "doc_id" else chunk.metadata.get(key)
+
+        if isinstance(expected, dict):
+            if "$in" in expected:
+                allowed = expected["$in"]
+                if actual not in allowed:
+                    return False
+            if "$nin" in expected:
+                excluded = expected["$nin"]
+                if actual in excluded:
+                    return False
+            # 若存在未知操作符且既非 $in 也非 $nin，则回退至精确值比较
+            if "$in" not in expected and "$nin" not in expected and actual != expected:
+                return False
+        elif actual != expected:
+            return False
+
+    return True
+
+
 def tokenize_multilingual(text: str) -> list[str]:
-    """Tokenize English words, numbers, and CJK unigrams (excluding functional stop-chars) + bigrams."""
+    """支持英文词元、数字以及中文 CJK 去停用字 unigram + bigram 的双语分词器。"""
+    if not text:
+        return []
     lower = text.lower()
     words = re.findall(r"[a-z0-9_]+", lower)
-    cjk_runs = re.findall(r"[一-鿿]+", lower)
+    cjk_runs = re.findall(r"[\u4e00-\u9fff]+", lower)
     cjk_tokens: list[str] = []
     for run in cjk_runs:
         cjk_tokens.extend(ch for ch in run if ch not in _CJK_STOP_CHARS)
@@ -37,6 +66,8 @@ def dense_retrieval(
     vector_store: object,
     filters: dict | None = None,
 ) -> list[SearchResult]:
+    if top_k <= 0:
+        return []
     return vector_store.search(query_embedding, top_k=top_k, filters=filters)
 
 
@@ -47,6 +78,8 @@ def sparse_retrieval(
     bm25_index: object = None,
     filters: dict | None = None,
 ) -> list[SearchResult]:
+    if top_k <= 0 or not query or not query.strip():
+        return []
     if bm25_index is None:
         bm25_index = BM25Scorer()
         bm25_index.index(chunks)
@@ -66,13 +99,13 @@ class BM25Scorer:
         self._N: int = 0
 
     def index(self, chunks: list[Chunk]):
-        self._chunks = chunks
-        self._N = len(chunks)
+        self._chunks = list(chunks)
+        self._N = len(self._chunks)
         self._doc_len = []
         self._doc_freq = Counter()
         self._doc_term_freqs = []
 
-        for chunk in chunks:
+        for chunk in self._chunks:
             tokens = self._tokenize(chunk.text)
             tf_counter = Counter(tokens)
             self._doc_term_freqs.append(tf_counter)
@@ -87,14 +120,14 @@ class BM25Scorer:
     def search(
         self, query: str, top_k: int = 10, filters: dict | None = None
     ) -> list[SearchResult]:
-        if self._N == 0:
+        if self._N == 0 or top_k <= 0 or not query or not query.strip():
             return []
 
         query_tokens = self._tokenize(query)
         if not query_tokens:
             return []
 
-        scores = np.zeros(self._N)
+        scores = np.zeros(self._N, dtype=np.float64)
         avg_dl = max(1e-6, self._avg_dl)
 
         for token in query_tokens:
@@ -117,20 +150,9 @@ class BM25Scorer:
         for idx in top_indices:
             if scores[idx] <= 0:
                 break
-            chunk = self._chunks[idx]
-            if filters:
-                matched = True
-                for k, v in filters.items():
-                    if k == "query":
-                        continue
-                    if k == "doc_id" and chunk.doc_id != v:
-                        matched = False
-                        break
-                    if k != "doc_id" and chunk.metadata.get(k) != v:
-                        matched = False
-                        break
-                if not matched:
-                    continue
+            chunk = self._chunks[int(idx)]
+            if not matches_filters(chunk, filters):
+                continue
             results.append(
                 SearchResult(
                     chunk=chunk,
@@ -152,6 +174,7 @@ def reciprocal_rank_fusion(
     if not result_sets:
         return []
 
+    safe_k = max(1, int(k))
     if weights is None or len(weights) != len(result_sets):
         weights = [1.0] * len(result_sets)
 
@@ -160,9 +183,12 @@ def reciprocal_rank_fusion(
     sources_map: dict[str, list[str]] = {}
 
     for weight, results in zip(weights, result_sets):
+        eff_weight = max(0.0, float(weight))
+        if eff_weight == 0.0:
+            continue
         for rank, result in enumerate(results):
             chunk_id = result.chunk.id
-            rrf_score = weight * (1.0 / (k + rank + 1))
+            rrf_score = eff_weight * (1.0 / (safe_k + rank + 1))
             scores[chunk_id] = scores.get(chunk_id, 0.0) + rrf_score
             if chunk_id not in best_result or result.score > best_result[chunk_id].score:
                 best_result[chunk_id] = result
@@ -175,7 +201,10 @@ def reciprocal_rank_fusion(
     if not scores:
         return []
 
-    max_rrf = max(scores.values()) or 1.0
+    max_rrf = max(scores.values())
+    if max_rrf <= 0:
+        return []
+
     fused: list[SearchResult] = []
     for chunk_id, total_rrf in sorted(scores.items(), key=lambda x: x[1], reverse=True):
         base = best_result[chunk_id]
@@ -185,7 +214,7 @@ def reciprocal_rank_fusion(
             if len(src_list) == 1
             else f"hybrid({'+'.join(src_list)})"
         )
-        # Combine normalized RRF with best normalized signal score
+        # 结合归一化 RRF 排序分与单路最佳置信度，避免纯排名丢失相似度尺度
         combined_score = 0.65 * (total_rrf / max_rrf) + 0.35 * min(1.0, max(0.0, base.score))
         fused.append(
             SearchResult(
@@ -199,14 +228,37 @@ def reciprocal_rank_fusion(
 
 
 def min_max_normalize(results: list[SearchResult]) -> list[SearchResult]:
+    """对检索结果进行无副作用的归一化，返回新的 SearchResult 列表。"""
     if not results:
-        return results
+        return []
     scores = [r.score for r in results]
     min_s, max_s = min(scores), max(scores)
+
     if max_s == min_s:
+        normalized: list[SearchResult] = []
         for r in results:
-            r.score = 1.0 if max_s > 0 else 0.0
-        return results
-    for r in results:
-        r.score = (r.score - min_s) / (max_s - min_s)
-    return results
+            if max_s <= 0:
+                norm_score = 0.0
+            elif r.retrieval_source == "dense":
+                # 单条或等分稠密向量结果保留原始余弦相似度尺度，避免无关文档被拉高到 1.0
+                norm_score = min(1.0, max(0.0, float(r.score)))
+            else:
+                norm_score = float(r.score) / (float(r.score) + 1.0)
+            normalized.append(
+                SearchResult(
+                    chunk=r.chunk,
+                    score=round(norm_score, 4),
+                    retrieval_source=r.retrieval_source,
+                )
+            )
+        return normalized
+
+    span = max_s - min_s
+    return [
+        SearchResult(
+            chunk=r.chunk,
+            score=float((r.score - min_s) / span),
+            retrieval_source=r.retrieval_source,
+        )
+        for r in results
+    ]

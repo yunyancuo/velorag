@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass, field
 from typing import Optional
@@ -7,10 +8,29 @@ from typing import Optional
 from velorag.core.types import (
     ChunkStrategy,
     EmbeddingBackend,
-    VectorStoreBackend,
-    RetrievalMode,
     RerankerType,
+    RetrievalMode,
+    VectorStoreBackend,
 )
+
+logger = logging.getLogger(__name__)
+
+DEFAULT_DEV_SECRET_KEY = "velorag-dev-secret-change-in-production"
+ALLOWED_JWT_ALGORITHMS = frozenset({"HS256", "HS384", "HS512"})
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+]
+
+
+def _parse_cors_origins(raw: str | None) -> list[str]:
+    """解析逗号分隔的 CORS 允许源列表。"""
+    if not raw:
+        return list(DEFAULT_CORS_ORIGINS)
+    origins = [item.strip() for item in raw.split(",") if item.strip()]
+    return origins or list(DEFAULT_CORS_ORIGINS)
 
 
 @dataclass
@@ -76,7 +96,9 @@ class ServerSettings:
     host: str = "0.0.0.0"
     port: int = 8000
     workers: int = 1
-    cors_origins: list[str] = field(default_factory=lambda: ["*"])
+    cors_origins: list[str] = field(default_factory=lambda: list(DEFAULT_CORS_ORIGINS))
+    max_upload_mb: int = 10
+    allowed_ingest_root: Optional[str] = None
 
 
 @dataclass
@@ -89,10 +111,27 @@ class DBSettings:
 
 @dataclass
 class AuthSettings:
-    secret_key: str = "velorag-dev-secret-change-in-production"
+    secret_key: str = DEFAULT_DEV_SECRET_KEY
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 60
     api_key_prefix: str = "vr-"
+
+    def __post_init__(self) -> None:
+        if self.algorithm not in ALLOWED_JWT_ALGORITHMS:
+            raise ValueError(
+                f"不支持的 JWT 签名算法: {self.algorithm!r}，仅允许 {sorted(ALLOWED_JWT_ALGORITHMS)}"
+            )
+        if not self.secret_key or len(self.secret_key) < 16:
+            raise ValueError("JWT secret_key 长度不得少于 16 个字符")
+        if self.secret_key == DEFAULT_DEV_SECRET_KEY:
+            env = os.getenv("VELORAG_ENV", "development").lower()
+            if env == "production":
+                raise ValueError(
+                    "生产环境禁止使用默认弱 JWT 密钥，请通过环境变量 VELORAG_SECRET_KEY 配置高强度密钥"
+                )
+            logger.warning(
+                "当前正在使用默认开发密钥 VELORAG_SECRET_KEY，生产部署前请务必替换。"
+            )
 
 
 @dataclass
@@ -138,12 +177,20 @@ class Settings:
                 persist_dir=os.getenv("VELORAG_DATA_DIR", "./data/velorag"),
                 num_shards=int(os.getenv("VELORAG_NUM_SHARDS", "1")),
             ),
+            server=ServerSettings(
+                host=os.getenv("VELORAG_HOST", "0.0.0.0"),
+                port=int(os.getenv("VELORAG_PORT", "8000")),
+                cors_origins=_parse_cors_origins(os.getenv("VELORAG_CORS_ORIGINS")),
+                max_upload_mb=max(1, int(os.getenv("VELORAG_MAX_UPLOAD_MB", "10"))),
+                allowed_ingest_root=os.getenv("VELORAG_ALLOWED_INGEST_ROOT"),
+            ),
             db=DBSettings(
                 url=os.getenv("VELORAG_DB_URL", "sqlite:///./data/velorag.db"),
                 echo=os.getenv("VELORAG_DB_ECHO", "").lower() == "true",
             ),
             auth=AuthSettings(
-                secret_key=os.getenv("VELORAG_SECRET_KEY", "velorag-dev-secret-change-in-production"),
+                secret_key=os.getenv("VELORAG_SECRET_KEY", DEFAULT_DEV_SECRET_KEY),
+                algorithm=os.getenv("VELORAG_JWT_ALGORITHM", "HS256"),
                 access_token_expire_minutes=int(os.getenv("VELORAG_TOKEN_EXPIRE", "60")),
             ),
             celery=CelerySettings(

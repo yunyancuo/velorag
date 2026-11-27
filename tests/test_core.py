@@ -8,8 +8,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 
 def test_document_parsing():
-    from velorag.document.parser import TextParser, MarkdownParser
     from velorag.document.chunker import Chunker
+    from velorag.document.parser import TextParser
 
     parser = TextParser()
     doc = parser.parse(b"Hello world. This is a test.", {"source": "test"})
@@ -23,10 +23,9 @@ def test_document_parsing():
 
 
 def test_chunker_strategies():
-    from velorag.document.chunker import Chunker
-    from velorag.document.parser import TextParser
     from velorag.core.settings import ChunkSettings
     from velorag.core.types import ChunkStrategy, Document
+    from velorag.document.chunker import Chunker
 
     doc = Document(id="test", content="Sentence one. Sentence two. Sentence three.", source="test")
 
@@ -56,8 +55,8 @@ def test_embedding_in_memory():
 
 
 def test_vector_store():
-    from velorag.indexing.vector_store import InMemoryVectorStore
     from velorag.core.types import Chunk
+    from velorag.indexing.vector_store import InMemoryVectorStore
 
     store = InMemoryVectorStore(dimension=128)
     assert store.count() == 0
@@ -74,8 +73,8 @@ def test_vector_store():
 
 
 def test_bm25_scorer():
-    from velorag.retrieval.engine import BM25Scorer
     from velorag.core.types import Chunk
+    from velorag.retrieval.engine import BM25Scorer
 
     chunks = [
         Chunk(id="c1", text="The quick brown fox jumps over the lazy dog", doc_id="d1", chunk_index=0),
@@ -92,8 +91,8 @@ def test_bm25_scorer():
 
 
 def test_knowledge_graph():
-    from velorag.graph.knowledge_graph import KnowledgeGraph
     from velorag.core.types import Chunk
+    from velorag.graph.knowledge_graph import KnowledgeGraph
 
     kg = KnowledgeGraph()
     chunks = [
@@ -119,7 +118,7 @@ def test_cache():
 
 
 def test_core_types():
-    from velorag.core.types import Document, Chunk, SearchResult, QueryContext
+    from velorag.core.types import Chunk, Document, QueryContext, SearchResult
 
     doc = Document(id="d1", content="test", metadata={"key": "val"})
     assert doc.id == "d1"
@@ -150,8 +149,8 @@ def test_registry():
 
 
 def test_pipeline_smoke():
-    from velorag.pipeline import VeloRAG
     from velorag.core.settings import Settings
+    from velorag.pipeline import VeloRAG
 
     settings = Settings()
     settings.index.num_shards = 1
@@ -160,7 +159,6 @@ def test_pipeline_smoke():
     rag = VeloRAG(settings)
 
     # Create a temp file and ingest
-    import tempfile
     with tempfile.NamedTemporaryFile(suffix=".txt", mode="w", encoding="utf-8", delete=False) as f:
         f.write("VeloRAG is a high-performance RAG framework. It supports hybrid search and knowledge graphs. "
                 "The framework is written in Python and uses vector stores for fast retrieval. "

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
 import yaml
 
 from velorag.core.types import (
@@ -63,7 +64,7 @@ class RerankerConfig:
 class KnowledgeGraphConfig:
     enabled: bool = True
     max_hops: int = 2
-    min_entity_Length: int = 2
+    min_entity_length: int = 2
     co_occurrence_window: int = 3
 
 
@@ -86,7 +87,14 @@ class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 8000
     workers: int = 1
-    cors_origins: list[str] = field(default_factory=lambda: ["*"])
+    cors_origins: list[str] = field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:5173",
+            "http://127.0.0.1:5173",
+        ]
+    )
 
 
 @dataclass

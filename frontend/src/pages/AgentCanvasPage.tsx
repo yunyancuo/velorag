@@ -1,5 +1,11 @@
 import React, { useEffect, useState } from "react";
-import { AgentCanvasModel, api, CanvasRunResponse } from "../api/client";
+import {
+  AgentCanvasModel,
+  api,
+  CanvasRunResponse,
+  extractApiError,
+  KBResponse,
+} from "../api/client";
 
 const NODE_COLORS: Record<string, string> = {
   begin: "#10b981",
@@ -14,25 +20,39 @@ const NODE_COLORS: Record<string, string> = {
 
 const AgentCanvasPage: React.FC = () => {
   const [canvas, setCanvas] = useState<AgentCanvasModel | null>(null);
+  const [kbs, setKbs] = useState<KBResponse[]>([]);
+  const [kbId, setKbId] = useState("default");
   const [query, setQuery] = useState("硕士研究生毕业总学分要求不少于多少学分？");
   const [runResult, setRunResult] = useState<CanvasRunResponse | null>(null);
   const [running, setRunning] = useState(false);
+  const [error, setError] = useState("");
 
   useEffect(() => {
-    api.listCanvases().then(({ data }) => {
-      if (data.length > 0) setCanvas(data[0]);
-    });
+    api
+      .listCanvases()
+      .then(({ data }) => {
+        if (data.length > 0) setCanvas(data[0]);
+      })
+      .catch((err) => setError(extractApiError(err, "Failed to load canvases")));
+    api
+      .listKB()
+      .then(({ data }) => setKbs(data))
+      .catch(() => {});
   }, []);
 
   const handleRun = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canvas || !query.trim()) return;
     setRunning(true);
+    setError("");
     try {
-      const { data } = await api.runCanvas(canvas.id, query);
+      const { data } = await api.runCanvas(canvas.id, query.trim(), kbId);
       setRunResult(data);
-    } catch {}
-    setRunning(false);
+    } catch (err) {
+      setError(extractApiError(err, "Canvas execution failed"));
+    } finally {
+      setRunning(false);
+    }
   };
 
   return (
@@ -45,6 +65,8 @@ const AgentCanvasPage: React.FC = () => {
           </p>
         </div>
       </div>
+
+      {error && <p className="error">{error}</p>}
 
       {canvas && (
         <div className="canvas-board">
@@ -84,6 +106,19 @@ const AgentCanvasPage: React.FC = () => {
       )}
 
       <form className="search-form" onSubmit={handleRun} style={{ marginTop: 20 }}>
+        <select
+          value={kbId}
+          onChange={(e) => setKbId(e.target.value)}
+          className="mode-select"
+          style={{ width: 200 }}
+        >
+          {kbs.length === 0 && <option value="default">default</option>}
+          {kbs.map((kb) => (
+            <option key={kb.id} value={kb.id}>
+              KB: {kb.name}
+            </option>
+          ))}
+        </select>
         <input
           type="text"
           value={query}

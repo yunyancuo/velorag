@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
+
 from fastapi import APIRouter
 from pydantic import BaseModel, Field
 
@@ -9,12 +10,16 @@ from velorag.eval.runner import EvaluationRunner
 
 router = APIRouter(prefix="/eval", tags=["RAG Evaluation"])
 
+EvalModeLiteral = Literal["dense", "sparse", "hybrid", "graph_enhanced"]
+
 
 class EvalRunRequest(BaseModel):
-    modes: list[str] = Field(
-        default_factory=lambda: ["dense", "sparse", "hybrid", "graph_enhanced"]
+    modes: list[EvalModeLiteral] = Field(
+        default_factory=lambda: ["dense", "sparse", "hybrid", "graph_enhanced"],
+        min_length=1,
+        max_length=4,
     )
-    top_k: int = 3
+    top_k: int = Field(default=3, ge=1, le=20)
 
 
 @router.get("/dataset")

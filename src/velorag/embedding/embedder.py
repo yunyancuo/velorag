@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import hashlib
+import math
+import re
 from abc import ABC, abstractmethod
 from typing import Optional
 
+from velorag.core.security import validate_http_url
 from velorag.core.settings import EmbeddingSettings
 from velorag.core.types import EmbeddingBackend
 
@@ -34,6 +38,7 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         if self._model is None and self._fallback is None:
             try:
                 from sentence_transformers import SentenceTransformer
+
                 self._model = SentenceTransformer(self.settings.model_name)
                 self._dimension = self._model.get_sentence_embedding_dimension()
             except Exception:
@@ -47,6 +52,8 @@ class SentenceTransformerEmbedder(BaseEmbedder):
         return self._dimension
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
         m = self.model
         if self._fallback is not None or m is None:
             return self._fallback.embed(texts)
@@ -65,51 +72,62 @@ class OpenAIEmbedder(BaseEmbedder):
     def __init__(self, settings: EmbeddingSettings):
         self.settings = settings
         self._dimension = settings.dimension
+        self._api_base = validate_http_url(
+            settings.api_base or "https://api.openai.com/v1"
+        ).rstrip("/")
 
     @property
     def dimension(self) -> int:
         return self._dimension
 
     def embed(self, texts: list[str]) -> list[list[float]]:
-        import httpx
+        if not texts:
+            return []
         api_key = self.settings.api_key
-        api_base = self.settings.api_base or "https://api.openai.com/v1"
+        if not api_key:
+            raise ValueError("使用 OpenAIEmbedder 必须配置 api_key")
+
+        import httpx
+
+        batch_size = max(1, int(self.settings.batch_size or 64))
+        vectors: list[list[float]] = []
 
         with httpx.Client(timeout=60) as client:
-            response = client.post(
-                f"{api_base}/embeddings",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json={"input": texts, "model": self.settings.model_name},
-            )
-            response.raise_for_status()
-            data = response.json()
-            return [item["embedding"] for item in data["data"]]
+            for start in range(0, len(texts), batch_size):
+                batch = texts[start : start + batch_size]
+                response = client.post(
+                    f"{self._api_base}/embeddings",
+                    headers={"Authorization": f"Bearer {api_key}"},
+                    json={"input": batch, "model": self.settings.model_name},
+                )
+                response.raise_for_status()
+                data = response.json()
+                vectors.extend(item["embedding"] for item in data["data"])
+        return vectors
 
     def embed_query(self, text: str) -> list[float]:
         return self.embed([text])[0]
 
 
 class HashEmbedder(BaseEmbedder):
-    """Deterministic character/word n-gram feature hashing embedder for offline/zero-dependency environments."""
+    """零外部依赖的确定性字符/词元 n-gram 特征哈希向量化器，适用于离线与测试环境。"""
 
     def __init__(self, settings: EmbeddingSettings):
         self.settings = settings
-        self._dimension = settings.dimension or 384
+        self._dimension = max(1, int(settings.dimension or 384))
 
     @property
     def dimension(self) -> int:
         return self._dimension
 
     def _encode_one(self, text: str) -> list[float]:
-        import hashlib
-        import math
-        import re
-
         vec = [0.0] * self._dimension
+        if not text:
+            return vec
+
         lower = text.lower()
-        tokens = re.findall(r"[a-z0-9_]+|[一-鿿]", lower)
+        tokens = re.findall(r"[a-z0-9_]+|[\u4e00-\u9fff]", lower)
         features = list(tokens)
-        # Add character bigrams/trigrams for CJK and subword semantics
         for i in range(len(tokens) - 1):
             features.append(f"{tokens[i]}_{tokens[i + 1]}")
         clean = re.sub(r"\s+", "", lower)
@@ -131,6 +149,8 @@ class HashEmbedder(BaseEmbedder):
         return vec
 
     def embed(self, texts: list[str]) -> list[list[float]]:
+        if not texts:
+            return []
         return [self._encode_one(t) for t in texts]
 
     def embed_query(self, text: str) -> list[float]:
@@ -140,8 +160,8 @@ class HashEmbedder(BaseEmbedder):
 def create_embedder(settings: EmbeddingSettings) -> BaseEmbedder:
     if settings.backend == EmbeddingBackend.HASH:
         return HashEmbedder(settings)
-    elif settings.backend == EmbeddingBackend.SENTENCE_TRANSFORMER:
+    if settings.backend == EmbeddingBackend.SENTENCE_TRANSFORMER:
         return SentenceTransformerEmbedder(settings)
-    elif settings.backend == EmbeddingBackend.OPENAI:
+    if settings.backend == EmbeddingBackend.OPENAI:
         return OpenAIEmbedder(settings)
     raise ValueError(f"Unsupported embedding backend: {settings.backend}")

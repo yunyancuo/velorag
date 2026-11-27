@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from typing import Optional
+
 from velorag.core.config import (
     ChunkingConfig,
     EmbeddingConfig,
     GenerationConfig,
     KnowledgeGraphConfig,
     RerankerConfig,
-    VeloRAGConfig,
     VectorStoreConfig,
+    VeloRAGConfig,
 )
 from velorag.core.types import (
     ChunkingStrategy,

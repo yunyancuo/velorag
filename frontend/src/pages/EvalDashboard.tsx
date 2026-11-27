@@ -1,23 +1,29 @@
 import React, { useState } from "react";
-import { api, EvalModeReport } from "../api/client";
+import { api, EvalModeReport, extractApiError } from "../api/client";
 
 const EvalDashboard: React.FC = () => {
   const [reports, setReports] = useState<EvalModeReport[]>([]);
   const [markdown, setMarkdown] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
   const [selectedMode, setSelectedMode] = useState<string>("graph_enhanced");
 
   const runSuite = async () => {
     setLoading(true);
+    setError("");
     try {
       const { data } = await api.runEvaluation(["dense", "sparse", "hybrid", "graph_enhanced"], 3);
       setReports(data.modes);
       setMarkdown(data.markdown_table);
-    } catch {}
-    setLoading(false);
+    } catch (err) {
+      setError(extractApiError(err, "Evaluation suite failed"));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const activeReport = reports.find((r) => r.mode === selectedMode) || reports[0];
+  const topK = reports[0]?.top_k ?? 3;
 
   return (
     <div className="page">
@@ -25,13 +31,15 @@ const EvalDashboard: React.FC = () => {
         <div>
           <h2>RAG Retrieval, Citation & Refusal Benchmark Suite</h2>
           <p style={{ color: "#94a3b8", fontSize: "0.9rem", marginTop: 4 }}>
-            Automated evaluation on Campus & AI Lab Bilingual Corpus (Recall@3, MRR@3, NDCG@3, Citation Precision & Refusal Accuracy)
+            Automated evaluation on Campus & AI Lab Bilingual Corpus (Recall@{topK}, MRR@{topK}, NDCG@{topK}, Citation Precision & Refusal Accuracy)
           </p>
         </div>
         <button className="btn-primary" onClick={runSuite} disabled={loading}>
           {loading ? "Running Benchmark..." : "🚀 Run Full Evaluation Suite"}
         </button>
       </div>
+
+      {error && <p className="error">{error}</p>}
 
       {reports.length === 0 && !loading && (
         <div className="result-card" style={{ textAlign: "center", padding: "36px 20px" }}>
@@ -52,9 +60,9 @@ const EvalDashboard: React.FC = () => {
               <thead>
                 <tr>
                   <th>Mode</th>
-                  <th>Recall@3</th>
-                  <th>MRR@3</th>
-                  <th>NDCG@3</th>
+                  <th>Recall@{topK}</th>
+                  <th>MRR@{topK}</th>
+                  <th>NDCG@{topK}</th>
                   <th>Citation Precision</th>
                   <th>Keyword Hit</th>
                   <th>Refusal Accuracy</th>
@@ -95,7 +103,7 @@ const EvalDashboard: React.FC = () => {
                   <tr>
                     <th>Query</th>
                     <th>Category</th>
-                    <th>Recall@3</th>
+                    <th>Recall@{topK}</th>
                     <th>Citations</th>
                     <th>Refusal Check</th>
                     <th>Answer Preview</th>

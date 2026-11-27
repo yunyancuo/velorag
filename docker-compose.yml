@@ -1,13 +1,16 @@
-version: "3.8"
-
 services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     volumes:
       - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   api:
     build:
@@ -17,16 +20,27 @@ services:
     ports:
       - "8000:8000"
     environment:
-      VELORAG_DB_URL: postgresql://velorag:velorag@db:5432/velorag
-      VELORAG_SECRET_KEY: ${VELORAG_SECRET_KEY:-change-me-in-production}
+      VELORAG_ENV: ${VELORAG_ENV:-production}
+      VELORAG_DB_URL: postgresql://${POSTGRES_USER:-velorag}:${POSTGRES_PASSWORD:?请配置 POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-velorag}
+      VELORAG_SECRET_KEY: ${VELORAG_SECRET_KEY:?请配置至少 32 位高强度 VELORAG_SECRET_KEY}
+      VELORAG_CORS_ORIGINS: ${VELORAG_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      VELORAG_MAX_UPLOAD_MB: ${VELORAG_MAX_UPLOAD_MB:-10}
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       VELORAG_DATA_DIR: /data/velorag
     volumes:
       - velorag_data:/data
     depends_on:
-      - redis
-      - db
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
   worker:
     build:
@@ -35,28 +49,36 @@ services:
     restart: unless-stopped
     command: celery -A velorag.tasks.celery_app worker -l info -c 4
     environment:
-      VELORAG_DB_URL: postgresql://velorag:velorag@db:5432/velorag
-      VELORAG_SECRET_KEY: ${VELORAG_SECRET_KEY:-change-me-in-production}
+      VELORAG_ENV: ${VELORAG_ENV:-production}
+      VELORAG_DB_URL: postgresql://${POSTGRES_USER:-velorag}:${POSTGRES_PASSWORD:?请配置 POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-velorag}
+      VELORAG_SECRET_KEY: ${VELORAG_SECRET_KEY:?请配置至少 32 位高强度 VELORAG_SECRET_KEY}
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/1
       VELORAG_DATA_DIR: /data/velorag
     volumes:
       - velorag_data:/data
     depends_on:
-      - redis
-      - db
+      redis:
+        condition: service_healthy
+      db:
+        condition: service_healthy
 
   db:
     image: postgres:16-alpine
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     environment:
-      POSTGRES_USER: velorag
-      POSTGRES_PASSWORD: velorag
-      POSTGRES_DB: velorag
+      POSTGRES_USER: ${POSTGRES_USER:-velorag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请配置 POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-velorag}
     volumes:
       - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-velorag} -d ${POSTGRES_DB:-velorag}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   redis_data:

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
+
 from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatSessionCreate(BaseModel):
-    kb_id: str = "default"
-    name: str = "New Conversation"
-    system_prompt: Optional[str] = "You are a helpful grounded assistant."
+    kb_id: str = Field(default="default", min_length=1, max_length=64)
+    name: str = Field(default="New Conversation", min_length=1, max_length=128)
+    system_prompt: Optional[str] = Field(
+        default="You are a helpful grounded assistant.", max_length=4000
+    )
 
 
 class ChatMessageResponse(BaseModel):
@@ -27,6 +30,7 @@ class ChatSessionResponse(BaseModel):
 
     id: str
     kb_id: str
+    owner_id: Optional[str] = None
     name: str
     system_prompt: str
     created_at: datetime
@@ -35,7 +39,7 @@ class ChatSessionResponse(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=8000)
     stream: bool = False
-    mode: str = "graph_enhanced"
-    top_k: int = 5
+    mode: Literal["dense", "sparse", "hybrid", "graph_enhanced"] = "graph_enhanced"
+    top_k: int = Field(default=5, ge=1, le=50)

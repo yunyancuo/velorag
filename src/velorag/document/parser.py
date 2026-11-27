@@ -4,7 +4,6 @@ import io
 import re
 import uuid
 from abc import ABC, abstractmethod
-from pathlib import Path
 from typing import Any
 
 from velorag.core.types import Document
@@ -22,35 +21,51 @@ class TextParser(BaseParser):
         return Document(
             id=uuid.uuid4().hex,
             content=text,
-            metadata=metadata or {},
+            metadata=dict(metadata) if metadata else {},
         )
 
 
 class PDFParser(BaseParser):
     def parse(self, content: bytes, metadata: dict[str, Any] | None = None) -> Document:
         from PyPDF2 import PdfReader
-        reader = PdfReader(io.BytesIO(content))
-        text_parts = []
-        for page in reader.pages:
-            page_text = page.extract_text()
-            if page_text:
-                text_parts.append(page_text)
+
+        try:
+            reader = PdfReader(io.BytesIO(content))
+            text_parts = []
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    text_parts.append(page_text)
+        except Exception as exc:
+            raise ValueError(f"PDF 文件解析失败: {exc}") from exc
+
         return Document(
             id=uuid.uuid4().hex,
             content="\n\n".join(text_parts),
-            metadata=metadata or {},
+            metadata=dict(metadata) if metadata else {},
         )
 
 
 class DocxParser(BaseParser):
     def parse(self, content: bytes, metadata: dict[str, Any] | None = None) -> Document:
         from docx import Document as DocxDoc
-        doc = DocxDoc(io.BytesIO(content))
-        text_parts = [p.text for p in doc.paragraphs if p.text.strip()]
+
+        try:
+            doc = DocxDoc(io.BytesIO(content))
+            text_parts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+            # 补充提取 Word 表格中的结构化文本，避免丢失表格关键信息
+            for table in doc.tables:
+                for row in table.rows:
+                    cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                    if cells:
+                        text_parts.append(" | ".join(cells))
+        except Exception as exc:
+            raise ValueError(f"DOCX 文件解析失败: {exc}") from exc
+
         return Document(
             id=uuid.uuid4().hex,
             content="\n".join(text_parts),
-            metadata=metadata or {},
+            metadata=dict(metadata) if metadata else {},
         )
 
 
@@ -62,7 +77,7 @@ class MarkdownParser(BaseParser):
         return Document(
             id=uuid.uuid4().hex,
             content=cleaned.strip(),
-            metadata=metadata or {},
+            metadata=dict(metadata) if metadata else {},
         )
 
 

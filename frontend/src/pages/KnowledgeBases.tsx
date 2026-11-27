@@ -1,36 +1,52 @@
 import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api, KBResponse, KBCreate } from "../api/client";
+import { api, extractApiError, KBCreate, KBResponse } from "../api/client";
 
 const KnowledgeBases: React.FC = () => {
   const [kbs, setKBs] = useState<KBResponse[]>([]);
   const [creating, setCreating] = useState(false);
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
+  const [error, setError] = useState("");
 
   const load = async () => {
     try {
+      setError("");
       const { data } = await api.listKB();
       setKBs(data);
-    } catch {}
+    } catch (err) {
+      setError(extractApiError(err, "Failed to load knowledge bases"));
+    }
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+  }, []);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
-    const payload: KBCreate = { name: name.trim(), description: desc.trim() };
-    await api.createKB(payload);
-    setName("");
-    setDesc("");
-    setCreating(false);
-    load();
+    try {
+      setError("");
+      const payload: KBCreate = { name: name.trim(), description: desc.trim() };
+      await api.createKB(payload);
+      setName("");
+      setDesc("");
+      setCreating(false);
+      await load();
+    } catch (err) {
+      setError(extractApiError(err, "Failed to create knowledge base"));
+    }
   };
 
   const handleDelete = async (id: string) => {
-    await api.deleteKB(id);
-    load();
+    try {
+      setError("");
+      await api.deleteKB(id);
+      await load();
+    } catch (err) {
+      setError(extractApiError(err, "Failed to delete knowledge base"));
+    }
   };
 
   return (
@@ -39,6 +55,8 @@ const KnowledgeBases: React.FC = () => {
         <h2>Knowledge Bases</h2>
         <button onClick={() => setCreating(true)}>+ New</button>
       </div>
+
+      {error && <p className="error">{error}</p>}
 
       {creating && (
         <form className="kb-form" onSubmit={handleCreate}>
@@ -72,19 +90,22 @@ const KnowledgeBases: React.FC = () => {
             </Link>
             <p>{kb.description}</p>
             <div className="kb-meta">
-              <span>{kb.document_count} documents</span>
-              <span>{kb.retrieval_mode}</span>
+              <span>{kb.document_count ?? 0} documents</span>
+              <span>{kb.retrieval_mode || "hybrid"}</span>
+              <span>{kb.is_public ? "public" : "private"}</span>
             </div>
             <div className="kb-actions">
               <Link to={`/search/${kb.id}`}>
                 <button className="btn-sm">Search</button>
               </Link>
-              <button
-                className="btn-sm btn-danger"
-                onClick={() => handleDelete(kb.id)}
-              >
-                Delete
-              </button>
+              {kb.id !== "default" && (
+                <button
+                  className="btn-sm btn-danger"
+                  onClick={() => handleDelete(kb.id)}
+                >
+                  Delete
+                </button>
+              )}
             </div>
           </div>
         ))}
