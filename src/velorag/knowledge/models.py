@@ -4,7 +4,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, Enum, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Enum, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import relationship
 
 from velorag.db.base import Base
@@ -25,8 +25,12 @@ class KnowledgeBaseModel(Base):
     id = Column(String, primary_key=True, default=lambda: uuid.uuid4().hex[:12])
     name = Column(String(128), nullable=False, index=True)
     description = Column(Text, default="")
+    owner_id = Column(String(64), nullable=True, index=True)
+    is_public = Column(Boolean, default=True, nullable=False)
+    chunk_strategy = Column(String(32), default="recursive", nullable=False)
     chunk_size = Column(Integer, default=512)
     chunk_overlap = Column(Integer, default=64)
+    retrieval_mode = Column(String(32), default="hybrid", nullable=False)
     embedding_model = Column(String(128), default="all-MiniLM-L6-v2")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(
@@ -38,6 +42,10 @@ class KnowledgeBaseModel(Base):
     documents = relationship(
         "DocumentModel", back_populates="kb", cascade="all, delete-orphan"
     )
+
+    @property
+    def document_count(self) -> int:
+        return len(self.documents) if self.documents is not None else 0
 
 
 class DocumentModel(Base):

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import Column, DateTime, ForeignKey, JSON, String, Text
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, String, Text
 from sqlalchemy.orm import relationship
 
 from velorag.db.base import Base
@@ -14,6 +14,7 @@ class ChatSessionModel(Base):
 
     id = Column(String, primary_key=True, default=lambda: uuid.uuid4().hex[:12])
     kb_id = Column(String, ForeignKey("velorag_knowledge_bases.id"), nullable=False, index=True)
+    owner_id = Column(String(64), nullable=True, index=True)
     name = Column(String(128), default="New Conversation")
     system_prompt = Column(Text, default="You are a helpful grounded assistant.")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))

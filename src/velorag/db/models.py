@@ -4,8 +4,17 @@ import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import (
-    Column, String, Text, Integer, Float, Boolean,
-    DateTime, ForeignKey, JSON, UniqueConstraint, Index,
+    JSON,
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -43,7 +52,7 @@ class ApiKey(Base):
     user_id = Column(String(32), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     name = Column(String(128), nullable=False)
     key_hash = Column(String(256), unique=True, nullable=False)
-    key_prefix = Column(String(8), nullable=False)
+    key_prefix = Column(String(16), nullable=False)
     is_active = Column(Boolean, default=True, nullable=False)
     last_used_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=_now, nullable=False)
@@ -106,7 +115,7 @@ class Chunk(Base):
     chunk_index = Column(Integer, nullable=False)
     text = Column(Text, nullable=False)
     token_count = Column(Integer, default=0)
-    metadata_ = Column("metadata", JSON, default={})
+    metadata_ = Column("metadata", JSON, default=dict)
     created_at = Column(DateTime(timezone=True), default=_now, nullable=False)
 
     document = relationship("Document", back_populates="chunks")

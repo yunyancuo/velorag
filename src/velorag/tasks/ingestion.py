@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import time
 from pathlib import Path
 
 from velorag.tasks.celery_app import celery_app
@@ -9,8 +8,7 @@ from velorag.tasks.celery_app import celery_app
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=30)
 def process_document(self, doc_id: str, kb_id: str, file_path: str):
     from velorag.db.base import get_session
-    from velorag.db.models import Document, Chunk
-    from velorag.document.loader import DocumentLoader
+    from velorag.db.models import Chunk, Document
     from velorag.pipeline import VeloRAG
 
     session = get_session()
@@ -24,7 +22,7 @@ def process_document(self, doc_id: str, kb_id: str, file_path: str):
 
         rag = VeloRAG()
         path = Path(file_path)
-        chunks = rag.ingest_file(str(path))
+        chunks = rag.ingest_file(str(path), metadata={"kb_id": kb_id, "doc_id": doc_id})
 
         for chunk in chunks:
             db_chunk = Chunk(
