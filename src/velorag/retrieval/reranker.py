@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Optional
 
-from velorag.core.types import SearchResult, RerankerType
+from velorag.core.types import RerankerType, SearchResult
 from velorag.retrieval.engine import tokenize_multilingual
 
 
@@ -72,11 +72,16 @@ class CrossEncoderReranker(BaseReranker):
         pairs = [(query, r.chunk.text) for r in results]
         scores = m.predict(pairs)
 
-        for result, score in zip(results, scores):
-            result.score = float(score)
-
-        results.sort(key=lambda x: x.score, reverse=True)
-        return results
+        reranked = [
+            SearchResult(
+                chunk=result.chunk,
+                score=float(score),
+                retrieval_source=result.retrieval_source,
+            )
+            for result, score in zip(results, scores)
+        ]
+        reranked.sort(key=lambda x: x.score, reverse=True)
+        return reranked
 
 
 def create_reranker(reranker_type: Optional[RerankerType]) -> Optional[BaseReranker]:

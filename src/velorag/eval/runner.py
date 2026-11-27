@@ -10,8 +10,8 @@ from velorag.core.config import (
     KnowledgeGraphConfig,
     RerankerConfig,
     RetrievalConfig,
-    VeloRAGConfig,
     VectorStoreConfig,
+    VeloRAGConfig,
 )
 from velorag.core.types import (
     ChunkingStrategy,
@@ -43,7 +43,7 @@ class EvaluationRunner:
         builtin_docs, builtin_samples = get_builtin_campus_benchmark()
         self.docs = list(docs) if docs is not None else builtin_docs
         self.samples = list(samples) if samples is not None else builtin_samples
-        self.top_k = top_k
+        self.top_k = max(1, int(top_k))
 
     def _build_pipeline(self) -> VeloRAG:
         config = VeloRAGConfig(
@@ -178,8 +178,9 @@ class EvaluationRunner:
 
     @staticmethod
     def format_markdown_report(mode_reports: Sequence[dict[str, Any]]) -> str:
+        top_k = mode_reports[0].get("top_k", 3) if mode_reports else 3
         lines = [
-            "| Mode | Recall@3 | MRR@3 | NDCG@3 | Citation Precision | Keyword Hit | Refusal Acc | Avg Latency (ms) |",
+            f"| Mode | Recall@{top_k} | MRR@{top_k} | NDCG@{top_k} | Citation Precision | Keyword Hit | Refusal Acc | Avg Latency (ms) |",
             "| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |",
         ]
         for rep in mode_reports:

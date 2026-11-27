@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from typing import Optional
-
 from velorag.core.settings import RetrievalSettings
-from velorag.core.types import Chunk, QueryContext, SearchResult, RetrievalMode
+from velorag.core.types import Chunk, QueryContext, RetrievalMode, SearchResult
 from velorag.graph.knowledge_graph import KnowledgeGraph
 from velorag.retrieval.engine import (
-    dense_retrieval,
-    sparse_retrieval,
-    reciprocal_rank_fusion,
-    min_max_normalize,
     BM25Scorer,
+    dense_retrieval,
+    matches_filters,
+    min_max_normalize,
+    reciprocal_rank_fusion,
+    sparse_retrieval,
 )
 
 
@@ -28,19 +27,27 @@ class HybridRetriever:
         self._all_chunks: list[Chunk] = []
 
     def set_chunks(self, chunks: list[Chunk]):
-        self._all_chunks = chunks
+        self._all_chunks = list(chunks)
         self._bm25 = BM25Scorer()
-        self._bm25.index(chunks)
+        self._bm25.index(self._all_chunks)
 
     def retrieve(self, query_embedding: list[float], context: QueryContext) -> list[SearchResult]:
+        if context.top_k <= 0 or not context.query or not context.query.strip():
+            return []
+
+        mode = (
+            context.mode
+            if isinstance(context.mode, RetrievalMode)
+            else RetrievalMode(context.mode)
+        )
         all_results: list[list[SearchResult]] = []
         weights: list[float] = []
 
-        if context.mode in (RetrievalMode.DENSE, RetrievalMode.HYBRID, RetrievalMode.GRAPH_ENHANCED):
+        if mode in (RetrievalMode.DENSE, RetrievalMode.HYBRID, RetrievalMode.GRAPH_ENHANCED):
             if self.vector_store:
                 dense_results = dense_retrieval(
                     query_embedding,
-                    self.settings.dense_top_k,
+                    max(context.top_k, self.settings.dense_top_k),
                     self.vector_store,
                     context.filters,
                 )
@@ -48,10 +55,10 @@ class HybridRetriever:
                     all_results.append(min_max_normalize(dense_results))
                     weights.append(self.settings.fusion_alpha)
 
-        if context.mode in (RetrievalMode.SPARSE, RetrievalMode.HYBRID, RetrievalMode.GRAPH_ENHANCED):
+        if mode in (RetrievalMode.SPARSE, RetrievalMode.HYBRID, RetrievalMode.GRAPH_ENHANCED):
             sparse_results = sparse_retrieval(
                 context.query,
-                self.settings.sparse_top_k,
+                max(context.top_k, self.settings.sparse_top_k),
                 self._all_chunks,
                 self._bm25,
                 filters=context.filters,
@@ -61,7 +68,7 @@ class HybridRetriever:
                 weights.append(1.0 - self.settings.fusion_alpha)
 
         if (
-            context.mode in (RetrievalMode.HYBRID, RetrievalMode.GRAPH_ENHANCED)
+            mode in (RetrievalMode.HYBRID, RetrievalMode.GRAPH_ENHANCED)
             and context.use_graph
             and self.knowledge_graph
         ):
@@ -82,7 +89,7 @@ class HybridRetriever:
     def _graph_enhanced_retrieval(
         self, query: str, filters: dict | None = None
     ) -> list[SearchResult]:
-        if not self.knowledge_graph:
+        if not self.knowledge_graph or not query or not query.strip():
             return []
 
         entities = self.knowledge_graph.find_relevant_entities(query)
@@ -104,12 +111,11 @@ class HybridRetriever:
         chunk_map = {c.id: c for c in self._all_chunks}
         results: list[SearchResult] = []
         for cid, score in sorted(chunk_best_score.items(), key=lambda x: x[1], reverse=True):
-            if cid not in chunk_map:
+            chunk = chunk_map.get(cid)
+            if chunk is None:
                 continue
-            chunk = chunk_map[cid]
-            if filters:
-                if "doc_id" in filters and chunk.doc_id != filters["doc_id"]:
-                    continue
+            if not matches_filters(chunk, filters):
+                continue
             results.append(
                 SearchResult(
                     chunk=chunk,

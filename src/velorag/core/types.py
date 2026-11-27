@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Optional
-import uuid
 
 
 class ChunkingStrategy(str, Enum):

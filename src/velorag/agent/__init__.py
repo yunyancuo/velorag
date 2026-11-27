@@ -1,3 +1,4 @@
+from velorag.agent.canvas import AgentCanvas
 from velorag.agent.component import (
     AgentComponentType,
     AgentContext,
@@ -11,7 +12,6 @@ from velorag.agent.component import (
     SwitchComponent,
     ToolComponent,
 )
-from velorag.agent.canvas import AgentCanvas
 
 __all__ = [
     "AgentCanvas",

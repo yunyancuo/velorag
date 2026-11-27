@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from typing import Optional, AsyncIterator
+from typing import AsyncIterator, Optional
 
 from velorag.core.types import (
     Chunk,
@@ -12,7 +12,6 @@ from velorag.core.types import (
     SearchResult,
 )
 from velorag.retrieval.engine import tokenize_multilingual
-
 
 DEFAULT_SYSTEM_PROMPT = """You are a grounded, trustworthy AI research assistant powered by VeloRAG.
 Answer the user's question ONLY using the provided context sources.
@@ -96,11 +95,15 @@ def extract_citations_from_answer(
 def check_evidence_sufficiency(
     query: str, chunks: list[Chunk], results: list[SearchResult], min_score: float = 0.12
 ) -> tuple[bool, Optional[str], float]:
+    if not query or not query.strip():
+        return False, "Query cannot be empty.", 0.0
     if not chunks:
         return False, "No supporting chunks retrieved from the knowledge base.", 0.0
 
     best_score = max((r.score for r in results), default=0.5)
     q_tokens = set(tokenize_multilingual(query))
+    if not q_tokens:
+        return False, "Query contains no meaningful searchable tokens.", 0.0
     stopwords = {
         "what", "how", "why", "when", "where", "who", "which", "is", "are", "the", "a", "an",
         "in", "of", "to", "for", "and", "or", "can", "does", "do",
@@ -110,11 +113,6 @@ def check_evidence_sufficiency(
     if not meaningful_q:
         meaningful_q = q_tokens
 
-    doc_tokens: set[str] = set()
-    for c in chunks:
-        doc_tokens.update(tokenize_multilingual(c.text))
-
-    overlap_ratio = len(meaningful_q & doc_tokens) / max(1, len(meaningful_q))
     top_chunk_tokens = set(tokenize_multilingual(chunks[0].text))
     top_overlap_ratio = len(meaningful_q & top_chunk_tokens) / max(1, len(meaningful_q))
     confidence = round(0.55 * min(1.0, best_score) + 0.45 * min(1.0, top_overlap_ratio * 1.5), 4)
@@ -140,11 +138,15 @@ class LLMGenerator:
         api_base: str | None = None,
         api_key: str | None = None,
         model: str | None = None,
+        system_prompt: str | None = None,
     ):
-        self.api_base = api_base or os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+        from velorag.core.security import validate_http_url
+
+        raw_base = api_base or os.getenv("OPENAI_API_BASE", "https://api.openai.com/v1")
+        self.api_base = validate_http_url(raw_base).rstrip("/")
         self.api_key = api_key if api_key is not None else os.getenv("OPENAI_API_KEY", "")
         self.model = model or os.getenv("VELORAG_LLM_MODEL", "gpt-4o-mini")
-        self.system_prompt = DEFAULT_SYSTEM_PROMPT
+        self.system_prompt = system_prompt or DEFAULT_SYSTEM_PROMPT
 
     def _extractive_fallback(
         self, query: str, chunks: list[Chunk], results: list[SearchResult]
@@ -231,19 +233,22 @@ class LLMGenerator:
 
         content: str = ""
         token_count: int = 0
+        used_model: str = "offline-extractive"
 
         if self.api_key:
             try:
                 import httpx
 
-                prompt = build_context_prompt(request.query, chunks, request.max_tokens // 2)
+                prompt = build_context_prompt(
+                    request.query, chunks, max(256, request.max_tokens // 2)
+                )
                 messages = [
                     {"role": "system", "content": request.system_prompt or self.system_prompt},
                     {"role": "user", "content": prompt},
                 ]
                 with httpx.Client(timeout=60) as client:
                     response = client.post(
-                        f"{self.api_base.rstrip('/')}/chat/completions",
+                        f"{self.api_base}/chat/completions",
                         headers={
                             "Authorization": f"Bearer {self.api_key}",
                             "Content-Type": "application/json",
@@ -260,9 +265,10 @@ class LLMGenerator:
                     data = response.json()
                     content = data["choices"][0]["message"]["content"]
                     token_count = data.get("usage", {}).get("total_tokens", 0)
+                    used_model = self.model
             except Exception:
                 content = self._extractive_fallback(request.query, chunks, results)
-                token_count = len(content) // 4
+                token_count = max(1, len(content) // 4)
         else:
             content = self._extractive_fallback(request.query, chunks, results)
             token_count = max(1, len(content) // 4)
@@ -277,6 +283,7 @@ class LLMGenerator:
         return GenerationResponse(
             content=content,
             sources=results,
+            model=used_model,
             citations=citations,
             token_count=token_count,
             refused=llm_refused,
