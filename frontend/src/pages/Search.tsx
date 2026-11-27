@@ -1,6 +1,12 @@
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
-import { api, GraphSubgraph, QueryResponse, SearchResult } from "../api/client";
+import {
+  api,
+  extractApiError,
+  GraphSubgraph,
+  QueryResponse,
+  SearchResult,
+} from "../api/client";
 
 const SAMPLE_QUERIES = [
   "硕士研究生毕业总学分和学位必修课分别要求不少于多少学分？",
@@ -12,41 +18,52 @@ const SAMPLE_QUERIES = [
 
 const Search: React.FC = () => {
   const { kbId } = useParams<{ kbId: string }>();
+  const activeKbId = kbId || "default";
   const [query, setQuery] = useState(SAMPLE_QUERIES[0]);
   const [mode, setMode] = useState("graph_enhanced");
   const [qaResult, setQaResult] = useState<QueryResponse | null>(null);
   const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
   const [graph, setGraph] = useState<GraphSubgraph | null>(null);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
 
-  const loadGraph = async (q?: string) => {
-    try {
-      const { data } = await api.getGraph(q, 24);
-      setGraph(data);
-    } catch {}
-  };
+  const loadGraph = useCallback(
+    async (q?: string) => {
+      try {
+        const { data } = await api.getGraph(q, 24, activeKbId);
+        setGraph(data);
+      } catch (err) {
+        setError(extractApiError(err, "Failed to load knowledge graph"));
+      }
+    },
+    [activeKbId]
+  );
 
   useEffect(() => {
     loadGraph();
-  }, []);
+  }, [loadGraph]);
 
   const handleRun = async (e?: React.FormEvent, customQuery?: string) => {
     if (e) e.preventDefault();
     const targetQuery = (customQuery ?? query).trim();
     if (!targetQuery) return;
     setLoading(true);
+    setError("");
     try {
       const searchMode = mode === "graph_enhanced" ? "hybrid" : mode;
-      const useGraph = mode === "graph_enhanced" || mode === "hybrid";
+      const useGraph = mode === "graph_enhanced";
       const [qaRes, searchRes] = await Promise.all([
-        api.query(targetQuery, 5, searchMode, useGraph),
-        api.search(kbId || "default", targetQuery, 5, searchMode, useGraph),
+        api.query(targetQuery, 5, searchMode, useGraph, activeKbId),
+        api.search(activeKbId, targetQuery, 5, searchMode, useGraph),
       ]);
       setQaResult(qaRes.data);
       setSearchResults(searchRes.data.results);
       await loadGraph(targetQuery);
-    } catch {}
-    setLoading(false);
+    } catch (err) {
+      setError(extractApiError(err, "Search & QA request failed"));
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -58,7 +75,10 @@ const Search: React.FC = () => {
             Multilingual Dense + BM25 + Multi-Hop Knowledge Graph Retrieval with Inline [Source N] Citations & Refusal Guardrail
           </p>
         </div>
+        <span className="badge">KB Scope: {activeKbId}</span>
       </div>
+
+      {error && <p className="error">{error}</p>}
 
       <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
         {SAMPLE_QUERIES.map((sq, i) => (

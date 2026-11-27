@@ -1,8 +1,37 @@
-import React from "react";
-import { Outlet, Link, useLocation } from "react-router-dom";
+import React, { useEffect, useState } from "react";
+import { Link, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { AUTH_EXPIRED_EVENT } from "../api/client";
 
 const Layout: React.FC = () => {
   const location = useLocation();
+  const navigate = useNavigate();
+  const [username, setUsername] = useState<string | null>(() =>
+    localStorage.getItem("velorag_token")
+      ? localStorage.getItem("velorag_username") || "Authenticated"
+      : null
+  );
+
+  useEffect(() => {
+    const syncAuth = () => {
+      const hasToken = Boolean(localStorage.getItem("velorag_token"));
+      setUsername(
+        hasToken ? localStorage.getItem("velorag_username") || "Authenticated" : null
+      );
+    };
+    window.addEventListener(AUTH_EXPIRED_EVENT, syncAuth);
+    window.addEventListener("storage", syncAuth);
+    return () => {
+      window.removeEventListener(AUTH_EXPIRED_EVENT, syncAuth);
+      window.removeEventListener("storage", syncAuth);
+    };
+  }, []);
+
+  const handleLogout = () => {
+    localStorage.removeItem("velorag_token");
+    localStorage.removeItem("velorag_username");
+    setUsername(null);
+    navigate("/login");
+  };
 
   const isActive = (path: string) =>
     location.pathname === path || location.pathname.startsWith(path + "/");
@@ -26,6 +55,15 @@ const Layout: React.FC = () => {
           <Link to="/eval" className={isActive("/eval") ? "active-link" : ""}>
             Eval Benchmark
           </Link>
+          {username ? (
+            <button type="button" className="btn-logout" onClick={handleLogout}>
+              {username} · Sign Out
+            </button>
+          ) : (
+            <Link to="/login" className="btn-logout">
+              Sign In
+            </Link>
+          )}
         </div>
       </nav>
       <main className="main">
